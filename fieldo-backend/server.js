@@ -4,6 +4,11 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 const mongoose = require('mongoose');
 
+// Import Schemas
+const Route = require('./models/Route');
+const Visit = require('./models/Visit');
+const Employee = require('./models/Employee');
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -14,72 +19,103 @@ const io = new Server(server, {
 });
 
 // --- MONGODB CONNECTION ---
-const MONGO_URI = process.env.MONGO_URI || "your_fallback_atlas_string_here";
+const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/fieldo";
 mongoose.connect(MONGO_URI)
-  .then(() => console.log("📦 Connected to MongoDB Atlas successfully!"))
+  .then(() => console.log("📦 Monolithic Backend: Connected to MongoDB Atlas!"))
   .catch(err => console.error("❌ MongoDB connection error:", err));
 
-// --- MONGOOSE SCHEMA ---
-const RouteSchema = new mongoose.Schema({
-  userId: { type: String, required: true },
-  name: { type: String, required: true },
-  date: { type: String, required: true },
-  isActive: { type: Boolean, default: true },
-  lastPing: { type: Number, default: Date.now },
-  points: [{
-    lat: Number,
-    lng: Number,
-    timestamp: Number
-  }]
+// --- HTTP REST ENDPOINTS FOR HR & EMPLOYEE CLIENTS ---
+
+// 1. Sync Employee Profile on Login
+app.post('/api/employees/sync', async (req, res) => {
+  const { userId, name, email } = req.body;
+  try {
+    const employee = await Employee.findOneAndUpdate(
+      { userId },
+      { name, email },
+      { upsert: true, new: true }
+    );
+    res.status(200).json(employee);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to sync profile" });
+  }
 });
 
-// Compound index to quickly find a user's route for a specific day
-RouteSchema.index({ userId: 1, date: 1 }, { unique: true });
-const Route = mongoose.model('Route', RouteSchema);
+// 2. Search Employees (HR Roster Lookup)
+app.get('/api/employees/search', async (req, res) => {
+  const { q } = req.query; // Query string param
+  try {
+    let filter = {};
+    if (q) filter = { $text: { $search: q } };
+    const employees = await Employee.find(filter).limit(20);
+    res.status(200).json(employees);
+  } catch (err) {
+    res.status(500).json({ error: "Employee search failed" });
+  }
+});
 
-// In-memory buffer to batch writes and save database performance
+// 3. Post a Client Visit Note (Employee Form Submission)
+app.post('/api/visits', async (req, res) => {
+  const { userId, employeeName, clientName, summary, lat, lng } = req.body;
+  const today = new Date().toISOString().split('T')[0];
+  try {
+    const newVisit = new Visit({ userId, employeeName, date: today, clientName, summary, lat, lng });
+    await newVisit.save();
+    res.status(201).json(newVisit);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to save visit note" });
+  }
+});
+
+// 4. Fetch Historic Route Points (HR Route Replay & Gaps View)
+app.get('/api/routes/:userId/:date', async (req, res) => {
+  const { userId, date } = req.params;
+  try {
+    const route = await Route.findOne({ userId, date });
+    res.status(200).json(route || { points: [] });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch route history" });
+  }
+});
+
+// --- WEBSOCKET REAL-TIME PIPELINE ---
 const locationBuffers = {};
 
 io.on('connection', (socket) => {
-  console.log(`🔌 Client connected: ${socket.id}`);
+  console.log(`🔌 Socket linked: ${socket.id}`);
 
   socket.on('register', (data) => {
     socket.userId = data.userId;
-    socket.role = data.role;
-    console.log(`🆔 Registered ${data.role}: ${data.userId}`);
+    console.log(`🆔 Socket registered user: ${data.userId}`);
   });
 
-  // 🛰️ Real-Time GPS Stream Event
   socket.on('location-update', async (data) => {
     const { userId, name, lat, lng, timestamp } = data;
     const today = new Date().toISOString().split('T')[0];
 
-    // 1. Broadcast instantly to HR web portal via WebSockets (Zero DB delay)
+    // Stream instantly to HR Portal (Zero database lag)
     socket.broadcast.emit('hr-location-stream', { userId, name, lat, lng, timestamp });
 
-    // 2. Client-Side / Server-Side Batching to MongoDB
-    if (!locationBuffers[userId]) {
-      locationBuffers[userId] = [];
-    }
+    // Server-side batch buffering 
+    if (!locationBuffers[userId]) locationBuffers[userId] = [];
     locationBuffers[userId].push({ lat, lng, timestamp });
 
-    // Every 5 pings (roughly 15-30 seconds), flush the buffer to MongoDB in bulk
+    // Flush batch write to Mongo database every 5 iterations
     if (locationBuffers[userId].length >= 5) {
       const pointsToFlush = [...locationBuffers[userId]];
-      locationBuffers[userId] = []; // Clear buffer immediately to prevent duplicates
+      locationBuffers[userId] = [];
 
       try {
         await Route.updateOne(
           { userId, date: today },
           {
-            $set: { name, lastPing: timestamp, isActive: true },
+            $set: { name, lastPing: timestamp },
             $push: { points: { $each: pointsToFlush } }
           },
-          { upsert: true } // Create document if it doesn't exist yet
+          { upsert: true }
         );
-        console.log(`💾 Flushed ${pointsToFlush.length} points to Mongo for ${name}`);
       } catch (err) {
-        console.error("❌ Failed to save points to Mongo:", err);
+        console.error("❌ Batch write update failed:", err);
       }
     }
   });
@@ -92,4 +128,4 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`🚀 Monolithic API running on port ${PORT}`));
