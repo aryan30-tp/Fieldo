@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Button, Platform, TouchableOpacity, ScrollView } from 'react-native';
 import { signOut } from 'firebase/auth';
-import { collection, onSnapshot } from 'firebase/firestore';
+import { collection, onSnapshot, doc, updateDoc } from 'firebase/firestore'; // Added doc & updateDoc
 import { useRouter } from 'expo-router';
 
 import { auth, db } from '../../src/services/firebaseConfig';
 
+// Dynamically import the web map ONLY if running on the web
 let WebMap = null;
 if (Platform.OS === 'web') {
   WebMap = require('../../src/components/WebMap').default;
@@ -21,30 +22,108 @@ export default function Dashboard() {
   useEffect(() => {
     setIsClient(true);
 
+    // 1. The Firebase Listener
     const unsubscribe = onSnapshot(collection(db, 'daily_routes'), (snapshot) => {
       const groupedData = {};
       const today = new Date().toISOString().split('T')[0];
+      
+      snapshot.forEach((firestoreDoc) => {
+        // 📱 Grab the pushToken from the database!
+        const { userId, name, date, points, isActive, lastPing, pushToken } = firestoreDoc.data(); 
+        
+        const segments = [];
+        let currentSegment = [];
 
-      snapshot.forEach((routeDoc) => {
-        const data = routeDoc.data();
-        const { userId, name, date, points, isActive } = data;
-        const formattedPoints = points ? points.map((point) => [point.lat, point.lng]) : [];
+        if (points && points.length > 0) {
+          const sortedPoints = [...points].sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 
-        if (!groupedData[userId]) {
-          groupedData[userId] = { name, history: {}, isLiveToday: false };
+          sortedPoints.forEach((point, index) => {
+            if (index === 0) {
+              currentSegment.push([point.lat, point.lng]);
+            } else {
+              const prevPoint = sortedPoints[index - 1];
+              if (point.timestamp && prevPoint.timestamp && (point.timestamp - prevPoint.timestamp > 300000)) {
+                segments.push(currentSegment); 
+                currentSegment = []; 
+              }
+              currentSegment.push([point.lat, point.lng]);
+            }
+          });
+          if (currentSegment.length > 0) {
+            segments.push(currentSegment);
+          }
         }
+        
+        if (!groupedData[userId]) {
+          groupedData[userId] = { name: name, history: {}, isLiveToday: false, lastPing: 0, pushToken: null };
+        }
+        
+        groupedData[userId].history[date] = segments; 
+        groupedData[userId].lastPing = lastPing || 0;
+        groupedData[userId].pushToken = pushToken; // Save the token to local state
 
-        groupedData[userId].history[date] = formattedPoints;
+        const isRecentlyActive = lastPing ? (Date.now() - lastPing) < 120000 : false;
 
-        if (date === today && isActive) {
+        if (date === today && isActive && isRecentlyActive) {
           groupedData[userId].isLiveToday = true;
         }
       });
-
+      
       setEmployeesData(groupedData);
     });
 
-    return () => unsubscribe();
+    // 2. The Local Watchdog & Push Notification Trigger
+    const watchdogTimer = setInterval(() => {
+      setEmployeesData((prevData) => {
+        const newData = { ...prevData };
+        let stateChanged = false;
+
+        Object.keys(newData).forEach((userId) => {
+          if (newData[userId].isLiveToday) {
+            const timeSinceLastPing = Date.now() - newData[userId].lastPing;
+            
+            // If it has been more than 2 minutes (120,000 ms), trigger the Dead Man's Switch!
+            if (timeSinceLastPing > 120000) {
+              newData[userId].isLiveToday = false;
+              stateChanged = true;
+              console.log(`🚨 Triggering Dead Man's Switch for ${newData[userId].name}`);
+
+              // --- SEND EXPO PUSH NOTIFICATION ---
+              if (newData[userId].pushToken) {
+                fetch("https://exp.host/--/api/v2/push/send", {
+                  method: "POST",
+                  headers: {
+                    "Accept": "application/json",
+                    "Accept-encoding": "gzip, deflate",
+                    "Content-Type": "application/json",
+                  },
+                  body: JSON.stringify({
+                    to: newData[userId].pushToken,
+                    sound: "default",
+                    title: "🚨 Tracking Disconnected",
+                    body: "Fieldo has lost your GPS signal. Please open the app to resume your shift.",
+                    priority: "high",
+                  }),
+                }).catch(err => console.error("Push failed:", err));
+              }
+
+              // --- FORCE OFFLINE IN FIRESTORE ---
+              // This stops the website from spamming notifications every 30 seconds
+              const today = new Date().toISOString().split('T')[0];
+              const routeRef = doc(db, 'daily_routes', `${userId}_${today}`);
+              updateDoc(routeRef, { isActive: false }).catch(() => console.log("Failed to force offline"));
+            }
+          }
+        });
+
+        return stateChanged ? newData : prevData;
+      });
+    }, 30000); // Sweeps every 30 seconds
+
+    return () => {
+      unsubscribe();
+      clearInterval(watchdogTimer);
+    };
   }, []);
 
   const handleLogout = async () => {
@@ -130,105 +209,24 @@ export default function Dashboard() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f5f5f5',
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 15,
-    backgroundColor: '#111',
-  },
-  title: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: 'white',
-  },
-  mainContent: {
-    flex: 1,
-    flexDirection: 'row',
-  },
-  sidebar: {
-    width: 280,
-    backgroundColor: 'white',
-    borderRightWidth: 1,
-    borderColor: '#ddd',
-    padding: 15,
-  },
-  sidebarTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: '#666',
-    marginBottom: 15,
-    textTransform: 'uppercase',
-  },
-  empCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 15,
-    backgroundColor: '#f8f9fa',
-    borderRadius: 8,
-    marginBottom: 8,
-    borderLeftWidth: 4,
-    borderColor: 'transparent',
-  },
-  empCardActive: {
-    backgroundColor: '#e6f2ff',
-    borderColor: '#007bff',
-  },
-  empName: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  statusDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    marginRight: 10,
-  },
-  statusDotLive: {
-    backgroundColor: '#22C55E',
-  },
-  statusDotIdle: {
-    backgroundColor: '#EF4444',
-  },
-  dateContainer: {
-    paddingLeft: 20,
-    marginBottom: 15,
-  },
-  dateCard: {
-    padding: 10,
-    borderBottomWidth: 1,
-    borderColor: '#eee',
-  },
-  dateCardActive: {
-    backgroundColor: '#007bff',
-    borderRadius: 4,
-  },
-  dateText: {
-    fontSize: 14,
-    color: '#333',
-  },
-  dateTextActive: {
-    color: 'white',
-    fontWeight: 'bold',
-  },
-  mapContainer: {
-    flex: 1,
-    backgroundColor: '#e0e0e0',
-  },
-  placeholderContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-    padding: 24,
-  },
-  placeholderText: {
-    fontSize: 18,
-    color: '#888',
-    textAlign: 'center',
-  },
+  container: { flex: 1, backgroundColor: '#f5f5f5' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 15, backgroundColor: '#111' },
+  title: { fontSize: 20, fontWeight: 'bold', color: 'white' },
+  mainContent: { flex: 1, flexDirection: 'row' },
+  sidebar: { width: 280, backgroundColor: 'white', borderRightWidth: 1, borderColor: '#ddd', padding: 15 },
+  sidebarTitle: { fontSize: 16, fontWeight: 'bold', color: '#666', marginBottom: 15, textTransform: 'uppercase' },
+  empCard: { flexDirection: 'row', alignItems: 'center', padding: 15, backgroundColor: '#f8f9fa', borderRadius: 8, marginBottom: 8, borderLeftWidth: 4, borderColor: 'transparent' },
+  empCardActive: { backgroundColor: '#e6f2ff', borderColor: '#007bff' },
+  empName: { fontSize: 16, fontWeight: '600' },
+  statusDot: { width: 10, height: 10, borderRadius: 5, marginRight: 10 },
+  statusDotLive: { backgroundColor: '#22C55E' },
+  statusDotIdle: { backgroundColor: '#EF4444' },
+  dateContainer: { paddingLeft: 20, marginBottom: 15 },
+  dateCard: { padding: 10, borderBottomWidth: 1, borderColor: '#eee' },
+  dateCardActive: { backgroundColor: '#007bff', borderRadius: 4 },
+  dateText: { fontSize: 14, color: '#333' },
+  dateTextActive: { color: 'white', fontWeight: 'bold' },
+  mapContainer: { flex: 1, backgroundColor: '#e0e0e0' },
+  placeholderContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff', padding: 24 },
+  placeholderText: { fontSize: 18, color: '#888', textAlign: 'center' },
 });
