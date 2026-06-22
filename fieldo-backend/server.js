@@ -27,7 +27,7 @@ mongoose.connect(MONGO_URI)
 
 // --- 1. EMPLOYEE ROSTER & MANAGEMENT ENDPOINTS ---
 
-// Sync Employee Profile on Login (Updated to prevent overwriting rich data fields)
+// Sync Employee Profile on Login (Prevents overwriting rich data fields)
 app.post('/api/employees/sync', async (req, res) => {
   const { userId, name, email } = req.body;
   try {
@@ -63,12 +63,11 @@ app.get('/api/employees/search', async (req, res) => {
 
 // --- 2. ADVANCED HR CORPORATE PROVISIONING DBMS ENDPOINTS ---
 
-// GET ALL EMPLOYEES WITH COMPUTED MONTH METRICS & TOP 3 CLIENTS
+// GET ALL EMPLOYEES WITH COMPUTED MONTH METRICS, TOP 3 CLIENTS, & AUTO CITY LOOKUP
 app.get('/api/hr/employees', async (req, res) => {
   try {
     const employees = await Employee.find({}).lean();
     
-    // Dynamic month generation (e.g., "2026-06-01")
     const now = new Date();
     const currentYear = now.getFullYear();
     const currentMonthPad = String(now.getMonth() + 1).padStart(2, '0');
@@ -82,7 +81,6 @@ app.get('/api/hr/employees', async (req, res) => {
       const daysPresentCount = await Route.countDocuments({
         userId: emp.userId,
         date: { $gte: startOfMonthStr, $lte: endOfMonthStr }
-        // Note: You can cross-verify matching duration conditions if preferred
       });
 
       // B. Aggregate Top 3 Client Occurrences from CRM logs
@@ -93,13 +91,35 @@ app.get('/api/hr/employees', async (req, res) => {
         { $limit: 3 }
       ]);
 
+      // C. 📍 AUTOMATIC CITY CALCULATION ENGINE
+      // Inspect initial tracking coordinate sets to determine active home city base
+      const shiftData = await Route.find({ userId: emp.userId }).select('points').limit(3).lean();
+      let autoCalculatedCity = emp.area || "Not Tracking";
+
+      if (shiftData.length > 0 && shiftData[0].points?.length > 0) {
+        const startPt = shiftData[0].points[0];
+        const lat = startPt.lat;
+        const lng = startPt.lng;
+
+        // Bounding Box Matrix matching coordinates for Delhi NCR zones
+        if (lat >= 28.30 && lat <= 28.55 && lng >= 76.80 && lng <= 77.15) {
+          autoCalculatedCity = "Gurugram";
+        } else if (lat >= 28.50 && lat <= 28.75 && lng >= 77.05 && lng <= 77.35) {
+          autoCalculatedCity = "Delhi";
+        } else if (emp.area && emp.area !== '-') {
+          autoCalculatedCity = emp.area;
+        } else {
+          autoCalculatedCity = "Out of Station";
+        }
+      }
+
       return {
         _id: emp._id,
         userId: emp.userId,
         empId: emp.empId || 'N/A',
         firstName: emp.firstName || emp.name || 'Unnamed',
         lastName: emp.lastName || '',
-        area: emp.area || '-',
+        area: autoCalculatedCity, // Natively returns resolved geographic city name
         email: emp.email,
         mobile: emp.mobile || '-',
         daysPresent: daysPresentCount,
@@ -125,16 +145,15 @@ app.post('/api/hr/employees/add', async (req, res) => {
       return res.status(400).json({ error: "Employee ID or Email parameter collision." });
     }
 
-    // Provision profile row container (Hooks cleanly to mobile app matching hooks)
     const newEmp = new Employee({
       userId: "PROVISIONED_" + Math.random().toString(36).substring(2, 11),
       empId,
       firstName,
       lastName,
-      area,
+      area: area || '-',
       email,
       mobile,
-      name: firstName // Backwards compatibility fallback hook
+      name: firstName
     });
 
     await newEmp.save();
@@ -142,6 +161,22 @@ app.post('/api/hr/employees/add', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Provisioning request processing error" });
+  }
+});
+
+// ✏️ UPDATE EMPLOYEE DETAILS (Inline Modification Route)
+app.put('/api/hr/employees/:id', async (req, res) => {
+  const { email, mobile } = req.body;
+  try {
+    const updatedEmployee = await Employee.findByIdAndUpdate(
+      req.params.id,
+      { $set: { email, mobile } },
+      { new: true }
+    );
+    res.status(200).json({ success: true, employee: updatedEmployee });
+  } catch (err) {
+    console.error("Failed to apply details update modifications:", err);
+    res.status(500).json({ error: "Profile details modification save error." });
   }
 });
 
@@ -158,7 +193,6 @@ app.delete('/api/hr/employees/:id', async (req, res) => {
 
 // --- 3. ATTENDANCE & ANALYTICS ENDPOINTS ---
 
-// Fetch Attendance History across dates for a specific user
 app.get('/api/attendance/:userId', async (req, res) => {
   const { userId } = req.params;
   try {
@@ -188,7 +222,6 @@ app.get('/api/attendance/:userId', async (req, res) => {
 
 // --- 4. CRM VISIT NOTES & MEETING SUMMARIES ---
 
-// Create a client meeting note submission
 app.post('/api/visits', async (req, res) => {
   const { userId, employeeName, clientName, summary, lat, lng } = req.body;
   const today = new Date().toISOString().split('T')[0];
@@ -201,7 +234,7 @@ app.post('/api/visits', async (req, res) => {
       summary,
       lat,
       lng,
-      timestamp: Date.now() // Confirms chronological timeline mapping metrics integrity
+      timestamp: Date.now()
     });
     await newVisit.save();
     res.status(201).json(newVisit);
@@ -210,7 +243,6 @@ app.post('/api/visits', async (req, res) => {
   }
 });
 
-// Fetch all client notes for HR view
 app.get('/api/visits', async (req, res) => {
   const { date, userId } = req.query;
   try {
