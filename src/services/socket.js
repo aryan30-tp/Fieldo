@@ -1,7 +1,7 @@
 import { io } from 'socket.io-client';
 
-// 🚨 REPLACE THIS WITH YOUR ACTUAL RENDER URL!
-const RENDER_BACKEND_URL = "https://fieldo-backend.onrender.com"; 
+// 🚨 CHANGED FROM fieldo-backend TO your exact live domain fieldo
+const RENDER_BACKEND_URL = "https://fieldo.onrender.com";
 
 class SocketService {
   socket = null;

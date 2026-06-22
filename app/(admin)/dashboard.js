@@ -1,51 +1,61 @@
-import { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Button, Platform, TouchableOpacity, ScrollView, TextInput } from 'react-native';
-import { signOut } from 'firebase/auth';
-import { collection, onSnapshot, doc, updateDoc } from 'firebase/firestore'; 
+import { useEffect, useState, useCallback, useMemo } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, Modal, Button } from 'react-native';
 import { useRouter } from 'expo-router';
+import { signOut } from 'firebase/auth';
+import { collection, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../../src/services/firebaseConfig';
 
-let WebMap = null;
-if (Platform.OS === 'web') {
-  WebMap = require('../../src/components/WebMap').default;
-}
-
-export default function Dashboard() {
+export default function HRCombinedControlCenter() {
   const router = useRouter();
   const [isClient, setIsClient] = useState(false);
   const [liveEmployees, setLiveEmployees] = useState({});
   
-  // 📁 Management & Search States
-  const [searchQuery, setSearchQuery] = useState('');
+  // 📁 Relational Dataset Inventory Indexes
+  const [sidebarSearch, setSidebarSearch] = useState('');
+  const [dbmsSearch, setDbmsSearch] = useState('');
+  const [areaFilter, setAreaFilter] = useState('');
   const [roster, setRoster] = useState([]);
-  const [selectedEmpId, setSelectedEmpId] = useState(null);
-  const [selectedEmpName, setSelectedEmpName] = useState('');
   
-  // 🔄 Replay & CRM View States
-  const [attendanceLogs, setAttendanceLogs] = useState([]);
-  const [visitNotes, setVisitNotes] = useState([]);
-  const [selectedDate, setSelectedDate] = useState(null);
-  const [replayPoints, setReplayPoints] = useState(null);
+  // 📝 User Modal Registration Configuration States
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [formData, setFormData] = useState({
+    empId: '', firstName: '', lastName: '', area: '', email: '', mobile: ''
+  });
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // 🔍 Fetch Data Index
+  const fetchDBMSData = useCallback(async () => {
+    try {
+      const response = await fetch('https://fieldo.onrender.com/api/hr/employees');
+      if (!response.ok) throw new Error();
+      const data = await response.json();
+      setRoster(data || []);
+    } catch (err) {
+      console.error("Failed to load master index roster dataset:", err);
+    }
+  }, []);
 
   useEffect(() => {
     setIsClient(true);
-    fetchMasterRoster(''); // Load base directory list
+    fetchDBMSData();
 
-    // 📻 Live Real-time Map Heartbeat listener via Firestore
+    // 📻 Live Real-Time Activity Heartbeat Listener
     const unsubscribe = onSnapshot(collection(db, 'daily_routes'), (snapshot) => {
       const liveMap = {};
       const today = new Date().toISOString().split('T')[0];
       
       snapshot.forEach((firestoreDoc) => {
+        if (!firestoreDoc.exists()) return;
         const { userId, name, date, points, isActive, lastPing } = firestoreDoc.data();
         const isRecentlyActive = lastPing ? (Date.now() - lastPing) < 120000 : false;
         
         if (date === today && isActive && isRecentlyActive) {
-          // If the worker is running foreground pings today, format array for the live pin display
           if (points && points.length > 0) {
             const sorted = [...points].sort((a, b) => a.timestamp - b.timestamp);
             const latest = sorted[sorted.length - 1];
-            liveMap[userId] = { name, lat: latest.lat, lng: latest.lng, lastPing };
+            if (latest && latest.lat && latest.lng) {
+              liveMap[userId] = { name, lat: latest.lat, lng: latest.lng, lastPing };
+            }
           }
         }
       });
@@ -53,102 +63,98 @@ export default function Dashboard() {
     });
 
     return () => unsubscribe();
-  }, []);
+  }, [fetchDBMSData]);
 
-  // 🔍 Fetch Roster using Fuzzy Text Search Endpoint
-  const fetchMasterRoster = async (query) => {
-    try {
-      const response = await fetch(`https://fieldo-backend.onrender.com/api/employees/search?q=${query}`);
-      const data = await response.json();
-      setRoster(data);
-    } catch (err) {
-      console.error("Failed to query employee index:", err);
+  // Account Provisioning Handlers
+  const handleAddEmployee = async () => {
+    if (!formData.empId || !formData.firstName || !formData.email || !formData.mobile) {
+      alert("Please fill out all mandatory operational form configurations.");
+      return;
     }
-  };
-
-  const handleSearchChange = (text) => {
-    setSearchQuery(text);
-    fetchMasterRoster(text);
-  };
-
-  // 📈 Click handler to pull data for a specific employee
-  const handleSelectEmployee = async (userId, name) => {
-    setSelectedEmpId(userId);
-    setSelectedEmpName(name);
-    setSelectedDate(null);
-    setReplayPoints(null);
-
+    setIsSubmitting(true);
     try {
-      // 1. Pull attendance metrics logs
-      const attRes = await fetch(`https://fieldo-backend.onrender.com/api/attendance/${userId}`);
-      const attData = await attRes.json();
-      setAttendanceLogs(attData);
-
-      // 2. Pull all CRM Client visit summaries submitted by this employee
-      const visitRes = await fetch(`https://fieldo-backend.onrender.com/api/visits?userId=${userId}`);
-      const visitData = await visitRes.json();
-      setVisitNotes(visitData);
-    } catch (err) {
-      console.error("Failed to fetch historical aggregates:", err);
-    }
-  };
-
-  // ⏱️ Load Route Replay Data array for a specific date
-  const handleLoadRouteReplay = async (date) => {
-    setSelectedDate(date);
-    try {
-      const res = await fetch(`https://fieldo-backend.onrender.com/api/routes/${selectedEmpId}/${date}`);
-      const data = await res.json();
-      
-      if (data && data.points && data.points.length > 0) {
-        // Formats coordinate geometry array cleanly for Leaflet mapper ingestion
-        const formattedCoordinates = data.points.map(p => [p.lat, p.lng]);
-        setReplayPoints(formattedCoordinates);
+      const response = await fetch('https://fieldo.onrender.com/api/hr/employees/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...formData, password: 'employee' })
+      });
+      if (response.ok) {
+        alert("Employee account provisioned successfully!");
+        setIsModalOpen(false);
+        setFormData({ empId: '', firstName: '', lastName: '', area: '', email: '', mobile: '' });
+        fetchDBMSData();
       } else {
-        setReplayPoints([]);
+        alert("Execution rejected. Double check field duplicates.");
       }
     } catch (err) {
-      console.error("Failed to pull tracking replay route coordinates:", err);
+      console.error(err);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  const handleLogout = async () => {
-    await signOut(auth);
-    router.replace('/login');
+  const handleDeleteEmployee = async (id, userId) => {
+    if (!confirm("Revoke workspace access parameters for this profile permanently?")) return;
+    try {
+      const response = await fetch(`https://fieldo.onrender.com/api/hr/employees/${id}?userId=${userId}`, { method: 'DELETE' });
+      if (response.ok) fetchDBMSData();
+    } catch (err) {
+      console.error(err);
+    }
   };
+
+  // 📻 Sidebar filter mapping computation layer
+  const filteredSidebarRoster = useMemo(() => {
+    return roster.filter(emp => {
+      const matchLabel = `${emp.firstName || ''} ${emp.lastName || ''}`.toLowerCase();
+      return matchLabel.includes(sidebarSearch.toLowerCase());
+    });
+  }, [roster, sidebarSearch]);
+
+  // 📊 Tabular main body grid mapping filter calculation
+  const filteredGridRoster = useMemo(() => {
+    return roster.filter(emp => {
+      const fullName = `${emp.firstName || ''} ${emp.lastName || ''}`.toLowerCase();
+      const idMatch = String(emp.empId || '').toLowerCase().includes(dbmsSearch.toLowerCase());
+      const nameMatch = fullName.includes(dbmsSearch.toLowerCase());
+      const areaMatch = areaFilter ? (emp.area || '').toLowerCase() === areaFilter.toLowerCase() : true;
+      return (idMatch || nameMatch) && areaMatch;
+    });
+  }, [roster, dbmsSearch, areaFilter]);
 
   return (
     <View style={styles.container}>
-      {/* HEADER BAR */}
+      {/* NAVIGATION HEADER TOP BAR */}
       <View style={styles.header}>
-        <Text style={styles.title}>Fieldo HR Portal</Text>
-        <Button title="Logout" onPress={handleLogout} color="#111" />
+        <Text style={styles.title}>Fieldo HR Portal Hub - Control Desk</Text>
+        <TouchableOpacity style={styles.logoutButton} onPress={async () => { await signOut(auth); router.replace('/login'); }}>
+          <Text style={styles.textWhite}>Logout</Text>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.mainContent}>
         
-        {/* SIDEBAR: MASTER ROSTER & MANAGEMENT LIST */}
+        {/* 📋 SIDEBAR INDEX MATRIX COMPONENT RETURNED */}
         <View style={styles.sidebar}>
-          <Text style={styles.sidebarTitle}>Employee Management</Text>
+          <Text style={styles.sidebarTitle}>Employee Roster Index</Text>
           <TextInput 
-            style={styles.searchBar}
-            placeholder="🔍 Search employees by name..."
+            style={styles.searchBarContainer}
+            placeholder="🔍 Quick filter list..."
             placeholderTextColor="#94A3B8"
-            value={searchQuery}
-            onChangeText={handleSearchChange}
+            value={sidebarSearch}
+            onChangeText={setSidebarSearch}
           />
-
-          <ScrollView style={{ flex: 1, marginTop: 10 }}>
-            {roster.map((emp) => {
+          <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
+            {filteredSidebarRoster.map((emp) => {
               const isLiveNow = !!liveEmployees[emp.userId];
               return (
                 <TouchableOpacity
                   key={emp.userId}
-                  style={[styles.empCard, selectedEmpId === emp.userId && styles.empCardActive]}
-                  onPress={() => handleSelectEmployee(emp.userId, emp.name)}
+                  style={styles.empCard}
+                  onPress={() => router.push(`/admin/tracking?userId=${emp.userId}&name=${emp.firstName}`)}
                 >
                   <View style={[styles.statusDot, isLiveNow ? styles.statusDotLive : styles.statusDotIdle]} />
-                  <Text style={styles.empName}>{emp.name}</Text>
+                  <Text style={styles.empName} numberOfLines={1}>{emp.firstName}</Text>
                   {isLiveNow && <Text style={styles.liveLabel}>LIVE</Text>}
                 </TouchableOpacity>
               );
@@ -156,101 +162,136 @@ export default function Dashboard() {
           </ScrollView>
         </View>
 
-        {/* WORKSPACE AREA: BREAKS DOWN HISTORIES, ATTENDANCE & MAP VISUALS */}
+        {/* 📊 CORE MAIN WRAPPER COMPONENT: DBMS AGGREGATES VIEWPORT */}
         <View style={styles.workspace}>
-          {selectedEmpId ? (
-            <View style={{ flex: 1, flexDirection: 'row' }}>
-              
-              {/* HISTORICAL LOG DETAILS COLUMN */}
-              <View style={styles.historyPanel}>
-                <Text style={styles.panelHeading}>📊 {selectedEmpName}'s Records</Text>
-                
-                {/* ATTENDANCE SHIFTS TRACKER */}
-                <Text style={styles.sectionSubHeading}>Attendance History</Text>
-                <ScrollView style={styles.listBlock} nestedScrollEnabled>
-                  {attendanceLogs.map((log) => (
-                    <TouchableOpacity 
-                      key={log.date} 
-                      style={[styles.historyRow, selectedDate === log.date && styles.historyRowActive]}
-                      onPress={() => handleLoadRouteReplay(log.date)}
-                    >
-                      <Text style={styles.rowDate}>📅 {log.date}</Text>
-                      <Text style={styles.rowHours}>{log.hoursLogged.toFixed(2)} Hrs Logged</Text>
-                    </TouchableOpacity>
-                  ))}
-                  {attendanceLogs.length === 0 && <Text style={styles.emptyLabel}>No shifts logged.</Text>}
-                </ScrollView>
+          <View style={styles.controlBar}>
+            <TextInput 
+              style={styles.tableInputFilter}
+              placeholder="🔍 Search master records by name or index..."
+              placeholderTextColor="#94A3B8"
+              value={dbmsSearch}
+              onChangeText={setDbmsSearch}
+            />
+            <TextInput 
+              style={[styles.tableInputFilter, { width: 180, flex: 0 }]}
+              placeholder="📍 Area Boundary..."
+              placeholderTextColor="#94A3B8"
+              value={areaFilter}
+              onChangeText={setAreaFilter}
+            />
+            <TouchableOpacity style={styles.primaryBtn} onPress={() => setIsModalOpen(true)}>
+              <Text style={styles.btnText}>➕ Provision Profile</Text>
+            </TouchableOpacity>
+          </View>
 
-                {/* CRM VISIT CLIENT MINUTES NOTES */}
-                <Text style={styles.sectionSubHeading}>CRM Client Visit Summaries</Text>
-                <ScrollView style={styles.listBlock} nestedScrollEnabled>
-                  {visitNotes.map((note) => (
-                    <View key={note._id} style={styles.noteCard}>
-                      <Text style={styles.noteClient}>🏢 Client: {note.clientName}</Text>
-                      <Text style={styles.noteSummary}>"{note.summary}"</Text>
-                      <Text style={styles.noteTime}>Logged: {new Date(note.timestamp).toLocaleTimeString()}</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={true} style={styles.tableScroll}>
+            <View style={{ padding: 12 }}>
+              <View style={styles.tableHeaderRow}>
+                <Text style={[styles.th, { width: 70 }]}>ID</Text>
+                <Text style={[styles.th, { width: 110 }]}>First Name</Text>
+                <Text style={[styles.th, { width: 110 }]}>Last Name</Text>
+                <Text style={[styles.th, { width: 100 }]}>Area</Text>
+                <Text style={[styles.th, { width: 130 }]}>Freq Client 1</Text>
+                <Text style={[styles.th, { width: 130 }]}>Freq Client 2</Text>
+                <Text style={[styles.th, { width: 130 }]}>Freq Client 3</Text>
+                <Text style={[styles.th, { width: 180 }]}>Corporate Email</Text>
+                <Text style={[styles.th, { width: 120 }]}>Mobile Phone</Text>
+                <Text style={[styles.th, { width: 100, textAlign: 'center' }]}>Month Days</Text>
+                <Text style={[styles.th, { width: 220, textAlign: 'center' }]}>Operations Control</Text>
+              </View>
+
+              <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
+                {filteredGridRoster.map((emp, idx) => (
+                  <View key={emp._id || idx} style={[styles.tableRow, idx % 2 === 1 && styles.rowAlternate]}>
+                    <Text style={[styles.td, { width: 70, fontWeight: '700' }]}>{emp.empId}</Text>
+                    <Text style={[styles.td, { width: 110 }]}>{emp.firstName}</Text>
+                    <Text style={[styles.td, { width: 110 }]}>{emp.lastName || '-'}</Text>
+                    <Text style={[styles.td, { width: 100 }]}>{emp.area || '-'}</Text>
+                    <Text style={[styles.td, { width: 130, color: '#0EA5E9', fontWeight: '700' }]}>{emp.freqClient1 || '-'}</Text>
+                    <Text style={[styles.td, { width: 130 }]}>{emp.freqClient2 || '-'}</Text>
+                    <Text style={[styles.td, { width: 130 }]}>{emp.freqClient3 || '-'}</Text>
+                    <Text style={[styles.td, { width: 180, fontSize: 12 }]}>{emp.email}</Text>
+                    <Text style={[styles.td, { width: 120 }]}>{emp.mobile || '-'}</Text>
+                    <Text style={[styles.td, { width: 100, textAlign: 'center', fontWeight: '800', color: '#22C55E' }]}>{emp.daysPresent || 0} Present</Text>
+
+                    <View style={[styles.td, { width: 220, flexDirection: 'row', gap: 6, justifyContent: 'center' }]}>
+                      <TouchableOpacity style={styles.actionViewBtn} onPress={() => router.push(`/admin/tracking?userId=${emp.userId}&name=${emp.firstName}`)}>
+                        <Text style={styles.actionBtnText}>🗺️ Track</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity style={styles.actionDeleteBtn} onPress={() => handleDeleteEmployee(emp._id, emp.userId)}>
+                        <Text style={styles.textWhite}>Revoke</Text>
+                      </TouchableOpacity>
                     </View>
-                  ))}
-                  {visitNotes.length === 0 && <Text style={styles.emptyLabel}>No visits filed yet.</Text>}
-                </ScrollView>
-              </View>
-
-              {/* MAP VISUALIZER REPLAY WINDOW */}
-              <View style={styles.mapFrame}>
-                {isClient && Platform.OS === 'web' && WebMap ? (
-                  <WebMap 
-                    routePoints={replayPoints} 
-                    employeeName={selectedEmpName} 
-                  />
-                ) : (
-                  <View style={styles.placeholder}><Text>Initializing Mapper Component Engine...</Text></View>
-                )}
-              </View>
-
+                  </View>
+                ))}
+              </ScrollView>
             </View>
-          ) : (
-            <View style={styles.placeholderContainer}>
-              <Text style={styles.placeholderText}>Select an active employee profile from the lookup directory.</Text>
-            </View>
-          )}
+          </ScrollView>
         </View>
 
       </View>
+
+      {/* REGISTRATION MODAL CONFIG BLOCK */}
+      <Modal visible={isModalOpen} animationType="fade" transparent={true}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalFormContent}>
+            <Text style={styles.modalTitle}>📝 Provision New Employee Profile</Text>
+            <TextInput style={styles.formInput} placeholder="ID Number (e.g. 104)" placeholderTextColor="#64748B" value={formData.empId} onChangeText={(t)=>setFormData({...formData, empId:t})} />
+            <TextInput style={styles.formInput} placeholder="First Name" placeholderTextColor="#64748B" value={formData.firstName} onChangeText={(t)=>setFormData({...formData, firstName:t})} />
+            <TextInput style={styles.formInput} placeholder="Last Name" placeholderTextColor="#64748B" value={formData.lastName} onChangeText={(t)=>setFormData({...formData, lastName:t})} />
+            <TextInput style={styles.formInput} placeholder="Assigned Territory Area" placeholderTextColor="#64748B" value={formData.area} onChangeText={(t)=>setFormData({...formData, area:t})} />
+            <TextInput style={styles.formInput} placeholder="Email" placeholderTextColor="#64748B" value={formData.email} onChangeText={(t)=>setFormData({...formData, email:t})} autoCapitalize="none" />
+            <TextInput style={styles.formInput} placeholder="Mobile Contact" placeholderTextColor="#64748B" value={formData.mobile} onChangeText={(t)=>setFormData({...formData, mobile:t})} />
+            <Text style={styles.infoCaption}>⚠️ Access key parameters initialized as: "employee".</Text>
+            <View style={styles.formButtonRow}>
+              <Button title="Cancel" onPress={() => setIsModalOpen(false)} color="#64748B" />
+              <Button title={isSubmitting ? "Processing..." : "Register User"} onPress={handleAddEmployee} disabled={isSubmitting} color="#3B82F6" />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f5f5' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 15, backgroundColor: '#111' },
-  title: { fontSize: 20, fontWeight: 'bold', color: 'white' },
+  container: { flex: 1, backgroundColor: '#F8FAFC' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingVertical: 14, backgroundColor: '#0F172A' },
+  title: { fontSize: 16, fontWeight: '900', color: '#F8FAFC' },
+  logoutButton: { backgroundColor: '#EF4444', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 },
+  textWhite: { color: '#FFFFFF', fontWeight: '700', fontSize: 12 },
   mainContent: { flex: 1, flexDirection: 'row' },
-  sidebar: { width: 300, backgroundColor: 'white', borderRightWidth: 1, borderColor: '#ddd', padding: 15 },
-  sidebarTitle: { fontSize: 16, fontWeight: 'bold', color: '#334155', marginBottom: 10, textTransform: 'uppercase' },
-  searchBar: { backgroundColor: '#F1F5F9', padding: 10, borderRadius: 8, borderWidth: 1, borderColor: '#CBD5E1', color: '#1E293B', fontSize: 14, marginBottom: 10 },
-  empCard: { flexDirection: 'row', alignItems: 'center', padding: 12, backgroundColor: '#f8f9fa', borderRadius: 8, marginBottom: 6 },
-  empCardActive: { backgroundColor: '#e6f2ff', borderWidth: 1, borderColor: '#007bff' },
-  empName: { fontSize: 15, fontWeight: '600', color: '#1E293B', flex: 1 },
-  statusDot: { width: 8, height: 8, borderRadius: 4, marginRight: 10 },
+  
+  // 📋 SIDEBAR LOOKUP GRID
+  sidebar: { width: 240, backgroundColor: '#FFFFFF', borderRightWidth: 1, borderColor: '#E2E8F0', padding: 14 },
+  sidebarTitle: { fontSize: 11, fontWeight: '800', color: '#64748B', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
+  searchBarContainer: { backgroundColor: '#F8FAFC', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: '#E2E8F0', fontSize: 13, color: '#1E293B', marginBottom: 12 },
+  empCard: { flexDirection: 'row', alignItems: 'center', padding: 10, backgroundColor: '#F8FAFC', borderRadius: 6, marginBottom: 6 },
+  empName: { fontSize: 13, fontWeight: '600', color: '#334155', flex: 1 },
+  statusDot: { width: 6, height: 6, borderRadius: 3, marginRight: 8 },
   statusDotLive: { backgroundColor: '#22C55E' },
   statusDotIdle: { backgroundColor: '#94A3B8' },
-  liveLabel: { fontSize: 10, fontWeight: '800', color: '#22C55E', backgroundColor: '#DCFCE7', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
-  workspace: { flex: 1, backgroundColor: '#fff' },
-  historyPanel: { width: 340, borderRightWidth: 1, borderColor: '#ddd', backgroundColor: '#FAFAFA', padding: 15 },
-  panelHeading: { fontSize: 18, fontWeight: '800', color: '#1E293B', marginBottom: 15 },
-  sectionSubHeading: { fontSize: 13, fontWeight: '700', color: '#64748B', uppercase: true, letterSpacing: 0.5, marginBottom: 8, marginTop: 10 },
-  listBlock: { maxHeight: 220, backgroundColor: 'white', borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', padding: 8, marginBottom: 10 },
-  historyRow: { flexDirection: 'row', justifyContent: 'space-between', padding: 10, borderBottomWidth: 1, borderColor: '#F1F5F9' },
-  historyRowActive: { backgroundColor: '#007bff', borderRadius: 4 },
-  rowDate: { fontSize: 13, color: '#334155', fontWeight: '500' },
-  rowHours: { fontSize: 13, color: '#64748B' },
-  noteCard: { backgroundColor: '#F8FAFC', padding: 10, borderRadius: 6, borderLeftWidth: 3, borderColor: '#38BDF8', marginBottom: 8 },
-  noteClient: { fontSize: 13, fontWeight: '700', color: '#1E293B' },
-  noteSummary: { fontSize: 13, color: '#475569', fontStyle: 'italic', marginVertical: 4 },
-  noteTime: { fontSize: 11, color: '#94A3B8' },
-  emptyLabel: { fontSize: 13, color: '#94A3B8', textAlign: 'center', padding: 15 },
-  mapFrame: { flex: 1, backgroundColor: '#E2E8F0' },
-  placeholderContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
-  placeholderText: { fontSize: 16, color: '#888' },
-  placeholder: { flex: 1, justifyContent: 'center', alignItems: 'center' }
+  liveLabel: { fontSize: 9, fontWeight: '900', color: '#15803D', backgroundColor: '#DCFCE7', paddingHorizontal: 4, paddingVertical: 1, borderRadius: 3 },
+  
+  // 📊 DBMS TABLE WORKSPACE
+  workspace: { flex: 1, padding: 16, backgroundColor: '#FFFFFF' },
+  controlBar: { flexDirection: 'row', gap: 10, marginBottom: 14, alignItems: 'center' },
+  tableInputFilter: { flex: 1, backgroundColor: '#F8FAFC', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: '#E2E8F0', fontSize: 13, color: '#1E293B' },
+  primaryBtn: { backgroundColor: '#3B82F6', paddingHorizontal: 14, paddingVertical: 9, borderRadius: 6 },
+  btnText: { color: '#FFFFFF', fontWeight: '800', fontSize: 13 },
+  tableScroll: { flex: 1, backgroundColor: '#FFFFFF', borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0' },
+  tableHeaderRow: { flexDirection: 'row', borderBottomWidth: 2, borderColor: '#CBD5E1', paddingBottom: 8, backgroundColor: '#F8FAFC' },
+  th: { fontSize: 11, fontWeight: '800', color: '#475569', textTransform: 'uppercase' },
+  tableRow: { flexDirection: 'row', paddingVertical: 10, borderBottomWidth: 1, borderColor: '#F1F5F9', alignItems: 'center' },
+  rowAlternate: { backgroundColor: '#F8FAFC' },
+  td: { fontSize: 13, color: '#334155' },
+  actionViewBtn: { backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#BFDBFE', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4 },
+  actionBtnText: { color: '#2563EB', fontWeight: '700', fontSize: 12 },
+  actionDeleteBtn: { backgroundColor: '#EF4444', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 4 },
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.4)', justifyContent: 'center', alignItems: 'center' },
+  modalFormContent: { backgroundColor: '#FFFFFF', borderRadius: 12, padding: 20, width: 380, gap: 10 },
+  modalTitle: { fontSize: 15, fontWeight: '800', color: '#1E293B', marginBottom: 4 },
+  formInput: { backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0', padding: 8, borderRadius: 6, fontSize: 13, color: '#1E293B' },
+  infoCaption: { fontSize: 11, color: '#64748B', backgroundColor: '#F1F5F9', padding: 6, borderRadius: 4 },
+  formButtonRow: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8 }
 });

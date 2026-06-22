@@ -45,7 +45,7 @@ export default function TrackerScreen() {
 
       // Sync user metadata to the MongoDB master roster on every successful boot session
       try {
-        await fetch("https://fieldo-backend.onrender.com/api/employees/sync", {
+        await fetch("https://fieldo.onrender.com/api/employees/sync", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -212,7 +212,6 @@ export default function TrackerScreen() {
     setIsSubmittingNote(true);
 
     try {
-      // Fetch precise immediate coordinate location to verify entry spot veracity
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       
       const payload = {
@@ -224,7 +223,7 @@ export default function TrackerScreen() {
         lng: loc.coords.longitude
       };
 
-      const response = await fetch("https://fieldo-backend.onrender.com/api/visits", {
+      const response = await fetch("https://fieldo.onrender.com/api/visits", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
