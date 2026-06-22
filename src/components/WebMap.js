@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
@@ -17,13 +17,21 @@ const createVectorPin = (color) => {
   });
 };
 
-function ChangeView({ center }) {
+// 🗺️ SMART CAMERA CONTROLLER COMPONENT
+function ChangeView({ activePosition, allPoints, isPlaying }) {
   const map = useMap();
+
   useEffect(() => {
-    if (Array.isArray(center) && typeof center[0] === 'number' && typeof center[1] === 'number') {
-      map.setView(center, map.getZoom());
+    if (isPlaying && Array.isArray(activePosition) && typeof activePosition[0] === 'number') {
+      // 🎥 PLAYBACK MODE: Camera centers on the moving position marker smoothly
+      map.setView(activePosition, map.getZoom(), { animate: true, duration: 0.5 });
+    } else if (!isPlaying && allPoints && allPoints.length > 0) {
+      // 📐 STATIC VIEW: Auto-zoom and scale the window boundaries to capture all routes across cities
+      const bounds = L.latLngBounds(allPoints.map(p => [p.lat, p.lng]));
+      map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
     }
-  }, [center, map]);
+  }, [activePosition, allPoints, isPlaying, map]);
+
   return null;
 }
 
@@ -37,41 +45,43 @@ export default function WebMap({ routePoints = [], employeeName, visitNotes = []
   const playbackIntervalRef = useRef(null);
   const baseSpeedMs = 600;
 
-  // Reset timeline context completely on param shifts
   useEffect(() => {
     clearInterval(playbackIntervalRef.current);
     setIsPlaying(false);
-    setCurrentIndex(routePoints.length); // Initialize showing full completed view by default
+    setCurrentIndex(routePoints.length); // Render complete static data array initially
     setPlaybackTime(null);
     setSpeedMultiplier(1);
     
     if (routePoints.length > 0) {
-      setVisiblePoints(routePoints.map(p => [p.lat, p.lng]));
+      setVisiblePoints(routePoints);
     } else {
       setVisiblePoints([]);
     }
   }, [routePoints]);
 
-  // Main Dynamic Playback Ticker Loop
   useEffect(() => {
     if (isPlaying) {
       clearInterval(playbackIntervalRef.current);
+
+      if (currentIndex >= routePoints.length) {
+        setVisiblePoints([]);
+        setCurrentIndex(0);
+      }
 
       const adjustedIntervalMs = baseSpeedMs / speedMultiplier;
 
       playbackIntervalRef.current = setInterval(() => {
         setCurrentIndex((prevIndex) => {
-          // 🛑 CRITICAL LOOP FIX: If we match or overshoot array length, immediately clear interval and lock execution state
           if (prevIndex >= routePoints.length - 1) {
             clearInterval(playbackIntervalRef.current);
             setIsPlaying(false);
-            return routePoints.length; // Lock at absolute final limit maximum bound
+            return routePoints.length;
           }
 
           const nextIndex = prevIndex + 1;
           const currentPoint = routePoints[prevIndex];
           
-          setVisiblePoints(routePoints.slice(0, nextIndex).map(p => [p.lat, p.lng]));
+          setVisiblePoints(routePoints.slice(0, nextIndex));
           
           if (currentPoint && currentPoint.timestamp) {
             setPlaybackTime(new Date(currentPoint.timestamp).toLocaleTimeString());
@@ -87,6 +97,39 @@ export default function WebMap({ routePoints = [], employeeName, visitNotes = []
     return () => clearInterval(playbackIntervalRef.current);
   }, [isPlaying, routePoints, speedMultiplier]);
 
+  // ✂️ CHRONOLOGICAL SEGMENT SPLITTER ENGINE
+  const pathSegments = useMemo(() => {
+    if (visiblePoints.length === 0) return [];
+    
+    const segments = [];
+    let currentSegment = [[visiblePoints[0].lat, visiblePoints[0].lng]];
+
+    for (let i = 1; i < visiblePoints.length; i++) {
+      const prev = visiblePoints[i - 1];
+      const curr = visiblePoints[i];
+
+      // 1. Time Gap Validation (e.g., if tracking stopped for more than 20 minutes)
+      const timeGapMs = curr.timestamp - prev.timestamp;
+      const isTimeGap = timeGapMs > 20 * 60 * 1000; 
+
+      // 2. Distance Jump Validation (e.g., rapid city switching via flight takeoff thresholds)
+      const latGap = Math.abs(curr.lat - prev.lat);
+      const lngGap = Math.abs(curr.lng - prev.lng);
+      const isGeographicJump = latGap > 0.15 || lngGap > 0.15;
+
+      if (isTimeGap || isGeographicJump) {
+        segments.push(currentSegment);
+        currentSegment = []; // Snaps tracking path line apart completely!
+      }
+      currentSegment.push([curr.lat, curr.lng]);
+    }
+    
+    if (currentSegment.length > 0) {
+      segments.push(currentSegment);
+    }
+    return segments;
+  }, [visiblePoints]);
+
   if (!Array.isArray(routePoints) || routePoints.length === 0) {
     return (
       <div style={styles.fallbackContainer}>
@@ -96,38 +139,16 @@ export default function WebMap({ routePoints = [], employeeName, visitNotes = []
   }
 
   const startPosition = [routePoints[0].lat, routePoints[0].lng];
-  
-  // Guard current target endpoints safely
   const lastIndex = currentIndex > 0 ? (currentIndex >= routePoints.length ? routePoints.length - 1 : currentIndex - 1) : 0;
   const activeEndPosition = [routePoints[lastIndex].lat, routePoints[lastIndex].lng];
   const activeTimestamp = routePoints[lastIndex]?.timestamp || Infinity;
 
-  // 🟢 TIME-SYNC FILTER: CRM visit notes only appear if they match or precede the current route line playback time
-  // When not playing and in "Static View", activeTimestamp is the absolute final point, showing ALL notes automatically.
-  // 🟢 FIXED DATE-LOCK FILTER: Ensure notes only show up if they match BOTH the location coordinates AND the exact selected shift date
-  const validNotes = Array.isArray(visitNotes) 
-    ? visitNotes.filter(n => {
-        const hasCoords = n && typeof n.lat === 'number' && typeof n.lng === 'number';
-        if (!hasCoords) return false;
-        
-        // 1. Extract the YYYY-MM-DD string from the note's timestamp
-        const noteDateStr = new Date(n.timestamp).toISOString().split('T')[0];
-        
-        // 2. Find the active date currently selected in the attendance panel tracker
-        // We look for a point in the active route array to match the current date context
-        const activeRouteDateStr = routePoints[0]?.timestamp 
-          ? new Date(routePoints[0].timestamp).toISOString().split('T')[0]
-          : null;
-
-        // 3. Only pass notes that belong to the active day being displayed
-        if (activeRouteDateStr && noteDateStr !== activeRouteDateStr) {
-          return false;
-        }
-
-        // 4. Chronological playback rule: check if it's within the current replay frame timeline
-        return n.timestamp <= activeTimestamp;
-      }) 
-    : [];
+  const validNotes = visitNotes.filter(n => {
+    if (!n || typeof n.lat !== 'number') return false;
+    const noteDateStr = new Date(n.timestamp).toISOString().split('T')[0];
+    const activeRouteDateStr = new Date(routePoints[0].timestamp).toISOString().split('T')[0];
+    return noteDateStr === activeRouteDateStr && n.timestamp <= activeTimestamp;
+  });
 
   return (
     <div style={{ height: '100%', width: '100%', position: 'relative' }}>
@@ -144,7 +165,6 @@ export default function WebMap({ routePoints = [], employeeName, visitNotes = []
             style={{ ...styles.hudButton, backgroundColor: isPlaying ? '#EF4444' : '#22C55E' }}
             onClick={() => {
               if (currentIndex >= routePoints.length) {
-                // If at the end, clear views to trigger full timeline rebuild from step zero
                 setVisiblePoints([]);
                 setCurrentIndex(0);
               }
@@ -160,7 +180,7 @@ export default function WebMap({ routePoints = [], employeeName, visitNotes = []
               setIsPlaying(false);
               clearInterval(playbackIntervalRef.current);
               setCurrentIndex(routePoints.length);
-              setVisiblePoints(routePoints.map(p => [p.lat, p.lng]));
+              setVisiblePoints(routePoints);
               setPlaybackTime(null);
               setSpeedMultiplier(1);
             }}
@@ -185,40 +205,36 @@ export default function WebMap({ routePoints = [], employeeName, visitNotes = []
             </button>
           ))}
         </div>
-        
-        <span style={styles.progressLabel}>
-          Point {currentIndex >= routePoints.length ? routePoints.length : currentIndex} of {routePoints.length} ({speedMultiplier}x)
-        </span>
       </div>
 
-      <MapContainer center={startPosition} zoom={15} style={{ height: '100%', width: '100%', borderRadius: '12px' }}>
-        <ChangeView center={activeEndPosition} />
+      <MapContainer center={startPosition} zoom={13} style={{ height: '100%', width: '100%', borderRadius: '12px' }}>
+        {/* 🎥 Connects camera behaviors downstream */}
+        <ChangeView activePosition={activeEndPosition} allPoints={routePoints} isPlaying={isPlaying} />
 
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
 
-        {visiblePoints.length > 0 && (
+        {/* 🗺️ Loop segments array mapping individually */}
+        {pathSegments.map((pointsArray, idx) => (
           <Polyline 
-            positions={visiblePoints} 
-            pathOptions={{ color: '#3B82F6', weight: 6, opacity: 0.85, lineJoin: 'round' }} 
+            key={`segment-${idx}`}
+            positions={pointsArray}
+            pathOptions={{ color: '#3B82F6', weight: 6, opacity: 0.85, lineJoin: 'round' }}
           />
-        )}
+        ))}
 
-        {/* Start Location Pin */}
         <Marker position={startPosition} icon={createVectorPin('#22C55E')}>
           <Popup>🟢 {employeeName} - Shift Started Here</Popup>
         </Marker>
 
-        {/* Dynamic Position Pin */}
         <Marker position={activeEndPosition} icon={createVectorPin('#EF4444')}>
           <Popup>
             🔴 {employeeName} - {currentIndex >= routePoints.length ? "Shift Ended Here" : "Current Replay Position"}
           </Popup>
         </Marker>
 
-        {/* 📝 CHRONOLOGICAL CRM VISITS: Pins spawn into existence only when their timestamp conditions clear */}
         {validNotes.map((note) => (
           <Marker key={note._id || note.timestamp} position={[note.lat, note.lng]} icon={createVectorPin('#0EA5E9')}>
             <Popup>
@@ -244,8 +260,7 @@ const styles = {
   hudButton: { flex: 1, border: 'none', color: '#FFFFFF', padding: '8px 12px', borderRadius: '6px', fontSize: '12px', fontWeight: '700', cursor: 'pointer' },
   speedSelectorStrip: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '4px', borderTop: '1px solid #334155', paddingTop: '8px' },
   speedLabel: { color: '#94A3B8', fontSize: '11px', fontWeight: '600' },
-  speedOptionButton: { border: '1px solid', color: '#FFFFFF', padding: '4px 10px', borderRadius: '4px', fontSize: '11px', fontWeight: '700', cursor: 'pointer', transition: 'all 0.15s' },
-  progressLabel: { color: '#64748B', fontSize: '11px', textAlign: 'center', fontStyle: 'italic' },
+  speedOptionButton: { border: '1px solid', color: '#FFFFFF', padding: '4px 10px', borderRadius: '4px', fontSize: '11px', fontWeight: '700', cursor: 'pointer' },
   fallbackContainer: { flex: 1, height: '100%', width: '100%', justifyContent: 'center', alignItems: 'center', display: 'flex', backgroundColor: '#F1F5F9', borderRadius: '12px', padding: 24 },
   fallbackText: { color: '#64748B', fontSize: '14px', fontWeight: '500', textAlign: 'center' },
   popupContent: { padding: '2px', maxWidth: '220px' },

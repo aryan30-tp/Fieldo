@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Platform } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, Platform } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { db } from '../../src/services/firebaseConfig';
@@ -11,24 +11,52 @@ if (Platform.OS === 'web') {
 
 export default function EmployeeTrackingWorkspace() {
   const router = useRouter();
-  const { userId, name } = useLocalSearchParams(); // Dynamic query parameters passed from DBMS page
+  const params = useLocalSearchParams();
   
+  // 📁 Navigation Query Parameters State Management
+  const [activeUserId, setActiveUserId] = useState(params.userId || null);
+  const [activeName, setActiveName] = useState(params.name || 'Employee');
+
   const [isClient, setIsClient] = useState(false);
+  const [liveEmployees, setLiveEmployees] = useState({});
+  const [roster, setRoster] = useState([]);
+  const [sidebarSearch, setSidebarSearch] = useState('');
+
+  // 🔄 Analytics States for Selected User
   const [attendanceLogs, setAttendanceLogs] = useState([]);
   const [visitNotes, setVisitNotes] = useState([]);
   const [selectedDate, setSelectedDate] = useState(null);
   const [replayPoints, setReplayPoints] = useState(null);
   const [isLoadingRoute, setIsLoadingRoute] = useState(false);
+  
   const [calendarMonth, setCalendarMonth] = useState(new Date().getMonth());
   const [calendarYear, setCalendarYear] = useState(new Date().getFullYear());
 
-  // Fetch historical attendance and CRM records for the explicitly parsed worker ID
-  const fetchHistoricalData = useCallback(async () => {
-    if (!userId) return;
+  // 🔍 Fetch master employee list for the left sidebar roster array
+  const fetchSidebarRoster = useCallback(async () => {
+    try {
+      const response = await fetch('https://fieldo.onrender.com/api/hr/employees');
+      if (!response.ok) throw new Error();
+      const data = await response.json();
+      setRoster(data || []);
+    } catch (err) {
+      console.error("Failed to load tracking workspace index:", err);
+    }
+  }, []);
+
+  // 📈 Pull shift coordinates and notes for the active worker
+  const loadTargetWorkspaceMetrics = useCallback(async (targetId) => {
+    if (!targetId) return;
+    setIsLoadingRoute(false);
+    setSelectedDate(null);
+    setReplayPoints(null);
+    setAttendanceLogs([]);
+    setVisitNotes([]);
+
     try {
       const [attRes, visitRes] = await Promise.all([
-        fetch(`https://fieldo.onrender.com/api/attendance/${userId}`),
-        fetch(`https://fieldo.onrender.com/api/visits?userId=${userId}`)
+        fetch(`https://fieldo.onrender.com/api/attendance/${targetId}`),
+        fetch(`https://fieldo.onrender.com/api/visits?userId=${targetId}`)
       ]);
 
       const attData = attRes.ok ? await attRes.json() : [];
@@ -37,16 +65,54 @@ export default function EmployeeTrackingWorkspace() {
       setAttendanceLogs(attData);
       setVisitNotes(visitData);
     } catch (err) {
-      console.error("Failed to load historical analytics parameters:", err);
+      console.error("Failed to pull aggregate tracking data details:", err);
     }
-  }, [userId]);
+  }, []);
 
   useEffect(() => {
     setIsClient(true);
-    fetchHistoricalData();
-  }, [fetchHistoricalData]);
+    fetchSidebarRoster();
+    
+    // Catch upstream parameters if passed initially
+    if (params.userId) {
+      setActiveUserId(params.userId);
+      setActiveName(params.name || 'Employee');
+    }
 
-  // Load raw point matrices for route replay execution
+    // 📻 Live Real-Time Activity Heartbeat Listener
+    const unsubscribe = onSnapshot(collection(db, 'daily_routes'), (snapshot) => {
+      const liveMap = {};
+      const today = new Date().toISOString().split('T')[0];
+      
+      snapshot.forEach((firestoreDoc) => {
+        if (!firestoreDoc.exists()) return;
+        const { userId, name, date, points, isActive, lastPing } = firestoreDoc.data();
+        const isRecentlyActive = lastPing ? (Date.now() - lastPing) < 120000 : false;
+        
+        if (date === today && isActive && isRecentlyActive) {
+          if (points && points.length > 0) {
+            const sorted = [...points].sort((a, b) => a.timestamp - b.timestamp);
+            const latest = sorted[sorted.length - 1];
+            if (latest && latest.lat && latest.lng) {
+              liveMap[userId] = { name, lat: latest.lat, lng: latest.lng, lastPing };
+            }
+          }
+        }
+      });
+      setLiveEmployees(liveMap);
+    });
+
+    return () => unsubscribe();
+  }, [fetchSidebarRoster, params.userId, params.name]);
+
+  // Hook tracker to watch state swaps when another worker is chosen
+  useEffect(() => {
+    if (activeUserId) {
+      loadTargetWorkspaceMetrics(activeUserId);
+    }
+  }, [activeUserId, loadTargetWorkspaceMetrics]);
+
+  // Load points array stream for a specific date
   const handleLoadRouteReplay = async (date) => {
     if (selectedDate === date && replayPoints) return;
     
@@ -54,12 +120,11 @@ export default function EmployeeTrackingWorkspace() {
     setIsLoadingRoute(true);
     
     try {
-      const res = await fetch(`https://fieldo.onrender.com/api/routes/${userId}/${date}`);
+      const res = await fetch(`https://fieldo.onrender.com/api/routes/${activeUserId}/${date}`);
       if (!res.ok) throw new Error();
       const data = await res.json();
       
       if (data && Array.isArray(data.points) && data.points.length > 0) {
-        // Retain tracking schema objects chronologically for playback injection
         const sortedPoints = data.points
           .filter(p => p && typeof p.lat === 'number' && typeof p.lng === 'number')
           .sort((a, b) => a.timestamp - b.timestamp);
@@ -69,16 +134,24 @@ export default function EmployeeTrackingWorkspace() {
         setReplayPoints([]);
       }
     } catch (err) {
-      console.error("Error building chronological timeline sequence:", err);
+      console.error("Error updating replay array index:", err);
       setReplayPoints([]);
     } finally {
       setIsLoadingRoute(false);
     }
   };
 
-  // Calendar Engine Core Block
+  // Sidebar dynamic computational loop
+  const filteredSidebarRoster = useMemo(() => {
+    return roster.filter(emp => {
+      const labelStr = `${emp.firstName || ''} ${emp.lastName || ''}`.toLowerCase();
+      return labelStr.includes(sidebarSearch.toLowerCase());
+    });
+  }, [roster, sidebarSearch]);
+
+  // Attendance Tracker Grid Builder
   const renderCalendarGrid = useMemo(() => {
-    if (!userId) return null;
+    if (!activeUserId) return null;
 
     const todayObj = new Date();
     const firstDayIndex = new Date(calendarYear, calendarMonth, 1).getDay();
@@ -139,25 +212,62 @@ export default function EmployeeTrackingWorkspace() {
         </div>
       </View>
     );
-  }, [attendanceLogs, userId, selectedDate, calendarMonth, calendarYear]);
+  }, [attendanceLogs, activeUserId, selectedDate, calendarMonth, calendarYear]);
 
   return (
     <View style={styles.container}>
-      {/* SCREEN APPLICATION HEADER */}
+      {/* GLOBAL MANAGEMENT SCREEN HEADER */}
       <View style={styles.header}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => router.push('/admin/dashboard')}>
+          {/* 🟢 FIXED ROUTE DIRECTORY REDIRECT PATH */}
+          <TouchableOpacity style={styles.backBtn} onPress={() => router.push('/dashboard')}>
             <Text style={styles.textWhite}>⬅️ Back to DBMS</Text>
           </TouchableOpacity>
-          <Text style={styles.title}>Fieldo Operational Tracking Panel</Text>
+          <Text style={styles.title}>Fieldo Operational Tracking Workspace</Text>
         </View>
-        <Text style={styles.activeProfileLabel}>Viewing Target: <Text style={{fontWeight: '900'}}>{name || 'Employee'}</Text></Text>
+        <Text style={styles.activeProfileLabel}>Selected Target: <Text style={{fontWeight: '900', color: '#38BDF8'}}>{activeName}</Text></Text>
       </View>
 
       <View style={styles.mainContent}>
-        {/* HISTORICAL WORKSPACE SIDE DETAILS AREA */}
+        
+        {/* 🟢 RESTORED LEFT SIDED QUICK SELECT EMPLOYEE LIST SIDEBAR */}
+        <View style={styles.sidebar}>
+          <Text style={styles.sidebarTitle}>Employee Directory</Text>
+          <TextInput 
+            style={styles.searchBarContainer}
+            placeholder="🔍 Search profiles..."
+            placeholderTextColor="#94A3B8"
+            value={sidebarSearch}
+            onChangeText={setSidebarSearch}
+          />
+          <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
+            {filteredSidebarRoster.map((emp) => {
+              const isLiveNow = !!liveEmployees[emp.userId];
+              const isSelected = activeUserId === emp.userId;
+              
+              return (
+                <TouchableOpacity
+                  key={emp.userId}
+                  style={[styles.empCard, isSelected && styles.empCardActive]}
+                  onPress={() => {
+                    setActiveUserId(emp.userId);
+                    setActiveName(emp.firstName || emp.name);
+                  }}
+                >
+                  <View style={[styles.statusDot, isLiveNow ? styles.statusDotLive : styles.statusDotIdle]} />
+                  <Text style={[styles.empName, isSelected && styles.textLinkActive]} numberOfLines={1}>
+                    {emp.firstName || emp.name}
+                  </Text>
+                  {isLiveNow && <Text style={styles.liveLabel}>LIVE</Text>}
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </View>
+
+        {/* HISTORICAL RECORDS PANEL */}
         <View style={styles.historyPanel}>
-          <Text style={styles.panelHeading}>📊 Shift Records Tracking</Text>
+          <Text style={styles.panelHeading}>📊 Logs Overview</Text>
           
           <Text style={styles.sectionSubHeading}>Attendance Dashboard Tracker</Text>
           {renderCalendarGrid}
@@ -193,20 +303,20 @@ export default function EmployeeTrackingWorkspace() {
           </ScrollView>
         </View>
 
-        {/* ISOLATED INTERACTIVE CONTAINER FOR LEAFLET WRAPPER RENDER */}
+        {/* INTERACTIVE LEAFLET DISPLAY MAP LAYER */}
         <View style={styles.mapFrame}>
           {isLoadingRoute ? (
             <View style={styles.mapCenteredMsg}><Text style={styles.msgText}>Processing history metrics...</Text></View>
           ) : isClient && Platform.OS === 'web' && WebMap && Array.isArray(replayPoints) ? (
             <WebMap 
               routePoints={replayPoints} 
-              employeeName={name || 'Employee'} 
+              employeeName={activeName} 
               visitNotes={visitNotes} 
             />
           ) : (
             <View style={styles.mapCenteredMsg}>
               <Text style={styles.msgText}>
-                {selectedDate ? "No tracking coordinate maps available for this selection." : "Select a shift log date or clear cell parameters from the tracker panel to view movement logs."}
+                {selectedDate ? "No tracking coordinate maps available for this selection." : "Select a shift log date or calendar cell parameter from the profile tracking panel to load route replays."}
               </Text>
             </View>
           )}
@@ -221,14 +331,28 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8FAFC' },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingVertical: 14, backgroundColor: '#0F172A' },
   title: { fontSize: 16, fontWeight: '900', color: '#F8FAFC' },
-  backBtn: { backgroundColor: '#334155', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, borderHW: 1, borderColor: '#475569' },
+  backBtn: { backgroundColor: '#334155', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6, borderWidth: 1, borderColor: '#475569' },
   activeProfileLabel: { color: '#94A3B8', fontSize: 13 },
   textWhite: { color: '#FFFFFF', fontWeight: '700', fontSize: 12 },
   mainContent: { flex: 1, flexDirection: 'row' },
-  historyPanel: { width: 340, borderRightWidth: 1, borderColor: '#E2E8F0', backgroundColor: '#F8FAFC', padding: 16, overflowY: 'auto' },
-  panelHeading: { fontSize: 16, fontWeight: '800', color: '#1E293B', marginBottom: 10 },
-  sectionSubHeading: { fontSize: 11, fontWeight: '800', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8, marginTop: 14 },
-  listBlock: { maxHeight: 150, minHeight: 80, backgroundColor: '#FFFFFF', borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', padding: 6, marginBottom: 4 },
+  
+  // Sidebar List Styles
+  sidebar: { width: 230, backgroundColor: '#FFFFFF', borderRightWidth: 1, borderColor: '#E2E8F0', padding: 12 },
+  sidebarTitle: { fontSize: 11, fontWeight: '800', color: '#64748B', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
+  searchBarContainer: { backgroundColor: '#F8FAFC', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: '#E2E8F0', fontSize: 13, color: '#1E293B', marginBottom: 12 },
+  empCard: { flexDirection: 'row', alignItems: 'center', padding: 10, backgroundColor: '#F8FAFC', borderRadius: 6, marginBottom: 6, borderWidth: 1, borderColor: 'transparent' },
+  empCardActive: { backgroundColor: '#EFF6FF', borderColor: '#3B82F6' },
+  empName: { fontSize: 13, fontWeight: '600', color: '#334155', flex: 1 },
+  textLinkActive: { color: '#2563EB', fontWeight: '700' },
+  statusDot: { width: 6, height: 6, borderRadius: 3, marginRight: 8 },
+  statusDotLive: { backgroundColor: '#22C55E' },
+  statusDotIdle: { backgroundColor: '#94A3B8' },
+  liveLabel: { fontSize: 9, fontWeight: '900', color: '#15803D', backgroundColor: '#DCFCE7', paddingHorizontal: 4, paddingVertical: 1, borderRadius: 3 },
+  
+  historyPanel: { width: 320, borderRightWidth: 1, borderColor: '#E2E8F0', backgroundColor: '#F8FAFC', padding: 14, overflowY: 'auto' },
+  panelHeading: { fontSize: 15, fontWeight: '800', color: '#1E293B', marginBottom: 8 },
+  sectionSubHeading: { fontSize: 11, fontWeight: '800', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6, marginTop: 12 },
+  listBlock: { maxHeight: 140, minHeight: 80, backgroundColor: '#FFFFFF', borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0', padding: 6, marginBottom: 4 },
   historyRow: { flexDirection: 'row', justifyContent: 'space-between', padding: 8, borderRadius: 6, marginBottom: 4 },
   historyRowActive: { backgroundColor: '#3B82F6' },
   rowDate: { fontSize: 13, color: '#334155', fontWeight: '600' },
