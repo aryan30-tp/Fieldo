@@ -77,10 +77,34 @@ app.get('/api/hr/employees', async (req, res) => {
 
     const enrichedRoster = await Promise.all(employees.map(async (emp) => {
       
-      // A. Days Present Count (shifts aggregated >= 15 mins / 0.25 hours)
-      const daysPresentCount = await Route.countDocuments({
+      // A. Days Present Count (shifts aggregated using accurate gaps and >= 4.0 hours threshold)
+      const monthlyShifts = await Route.find({
         userId: emp.userId,
         date: { $gte: startOfMonthStr, $lte: endOfMonthStr }
+      }).lean();
+
+      let daysPresentCount = 0;
+
+      monthlyShifts.forEach(session => {
+        if (session.points && session.points.length >= 2) {
+          const sortedPoints = [...session.points].sort((a, b) => a.timestamp - b.timestamp);
+          let activeTrackingMs = 0;
+
+          for (let i = 1; i < sortedPoints.length; i++) {
+            const delta = sortedPoints[i].timestamp - sortedPoints[i - 1].timestamp;
+            // Accumulate time if updates are consecutive (within 5 minutes)
+            if (delta > 0 && delta <= 5 * 60 * 1000) {
+              activeTrackingMs += delta;
+            }
+          }
+
+          const activeHours = activeTrackingMs / 3600000;
+          
+          // 🟢 NEW ACCURATE THRESHOLD: Must achieve at least 4.0 active hours to be counted as present
+          if (activeHours >= 4.0) {
+            daysPresentCount++;
+          }
+        }
       });
 
       // B. Aggregate Top 3 Client Occurrences from CRM logs
@@ -92,7 +116,6 @@ app.get('/api/hr/employees', async (req, res) => {
       ]);
 
       // C. 📍 AUTOMATIC CITY CALCULATION ENGINE
-      // Inspect initial tracking coordinate sets to determine active home city base
       const shiftData = await Route.find({ userId: emp.userId }).select('points').limit(3).lean();
       let autoCalculatedCity = emp.area || "Not Tracking";
 
@@ -119,7 +142,7 @@ app.get('/api/hr/employees', async (req, res) => {
         empId: emp.empId || 'N/A',
         firstName: emp.firstName || emp.name || 'Unnamed',
         lastName: emp.lastName || '',
-        area: autoCalculatedCity, // Natively returns resolved geographic city name
+        area: autoCalculatedCity,
         email: emp.email,
         mobile: emp.mobile || '-',
         daysPresent: daysPresentCount,
