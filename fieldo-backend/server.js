@@ -193,29 +193,45 @@ app.delete('/api/hr/employees/:id', async (req, res) => {
 
 // --- 3. ATTENDANCE & ANALYTICS ENDPOINTS ---
 
+// 🟢 ACCURATE ATTENDANCE ENGINE: Aggregates real operational duration by ignoring large inactive gaps
 app.get('/api/attendance/:userId', async (req, res) => {
   const { userId } = req.params;
   try {
-    const sessions = await Route.find({ userId }).select('date points lastPing').sort({ date: -1 });
+    const sessions = await Route.find({ userId }).sort({ date: -1 }).lean();
     
     const logs = sessions.map(session => {
-      const firstPoint = session.points[0];
-      const startTime = firstPoint ? firstPoint.timestamp : null;
-      const endTime = session.lastPing;
-      
-      const durationHours = startTime && endTime ? ((endTime - startTime) / 3600000).toFixed(2) : 0;
+      if (!session.points || session.points.length < 2) {
+        return { date: session.date, startedAt: null, endedAt: session.lastPing, hoursLogged: 0 };
+      }
+
+      // Sort points chronologically to ensure timeline calculation safety
+      const sortedPoints = [...session.points].sort((a, b) => a.timestamp - b.timestamp);
+      let totalTrackingActiveMs = 0;
+
+      // Loop through coordinates and accumulate time ONLY if updates are consecutive (within 5 minutes)
+      for (let i = 1; i < sortedPoints.length; i++) {
+        const delta = sortedPoints[i].timestamp - sortedPoints[i - 1].timestamp;
+        
+        // If the gap is less than 5 minutes, add it to active working time
+        if (delta > 0 && delta <= 5 * 60 * 1000) {
+          totalTrackingActiveMs += delta;
+        }
+      }
+
+      const activeHours = (totalTrackingActiveMs / 3600000);
 
       return {
         date: session.date,
-        startedAt: startTime,
-        endedAt: endTime,
-        hoursLogged: parseFloat(durationHours)
+        startedAt: sortedPoints[0].timestamp,
+        endedAt: session.lastPing,
+        hoursLogged: parseFloat(activeHours.toFixed(2)) // Returns exact time tracked
       };
     });
 
     res.status(200).json(logs);
   } catch (err) {
-    res.status(500).json({ error: "Failed to compile attendance metrics" });
+    console.error(err);
+    res.status(500).json({ error: "Failed to compile precise metrics" });
   }
 });
 

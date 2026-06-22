@@ -54,6 +54,7 @@ export default function EmployeeTrackingWorkspace() {
     setVisitNotes([]);
 
     try {
+      // 🟢 SYNTAX FIXED: Restored clean template literal hooks completely
       const [attRes, visitRes] = await Promise.all([
         fetch(`https://fieldo.onrender.com/api/attendance/${targetId}`),
         fetch(`https://fieldo.onrender.com/api/visits?userId=${targetId}`)
@@ -73,13 +74,11 @@ export default function EmployeeTrackingWorkspace() {
     setIsClient(true);
     fetchSidebarRoster();
     
-    // Catch upstream parameters if passed initially
     if (params.userId) {
       setActiveUserId(params.userId);
       setActiveName(params.name || 'Employee');
     }
 
-    // 📻 Live Real-Time Activity Heartbeat Listener
     const unsubscribe = onSnapshot(collection(db, 'daily_routes'), (snapshot) => {
       const liveMap = {};
       const today = new Date().toISOString().split('T')[0];
@@ -105,14 +104,12 @@ export default function EmployeeTrackingWorkspace() {
     return () => unsubscribe();
   }, [fetchSidebarRoster, params.userId, params.name]);
 
-  // Hook tracker to watch state swaps when another worker is chosen
   useEffect(() => {
     if (activeUserId) {
       loadTargetWorkspaceMetrics(activeUserId);
     }
   }, [activeUserId, loadTargetWorkspaceMetrics]);
 
-  // Load points array stream for a specific date
   const handleLoadRouteReplay = async (date) => {
     if (selectedDate === date && replayPoints) return;
     
@@ -141,15 +138,13 @@ export default function EmployeeTrackingWorkspace() {
     }
   };
 
-  // Sidebar dynamic computational loop
   const filteredSidebarRoster = useMemo(() => {
     return roster.filter(emp => {
-      const labelStr = `${emp.firstName || ''} ${emp.lastName || ''}`.toLowerCase();
+      const labelStr = `${emp.firstName || emp.name || ''} ${emp.lastName || ''}`.toLowerCase();
       return labelStr.includes(sidebarSearch.toLowerCase());
     });
   }, [roster, sidebarSearch]);
 
-  // Attendance Tracker Grid Builder
   const renderCalendarGrid = useMemo(() => {
     if (!activeUserId) return null;
 
@@ -219,10 +214,14 @@ export default function EmployeeTrackingWorkspace() {
       {/* GLOBAL MANAGEMENT SCREEN HEADER */}
       <View style={styles.header}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
-          {/* 🟢 FIXED ROUTE DIRECTORY REDIRECT PATH */}
-          <TouchableOpacity style={styles.backBtn} onPress={() => router.push('/dashboard')}>
-            <Text style={styles.textWhite}>⬅️ Back to DBMS</Text>
-          </TouchableOpacity>
+          {/* 🟢 HISTORY FIXED: Swapped out stacking push() rules for a clean browser history state replacement */}
+         // 🟢 FIXED: Route back to the actual dashboard path, NOT the root login page
+<TouchableOpacity 
+  style={styles.backBtn} 
+  onPress={() => router.replace('/dashboard')}
+>
+  <Text style={styles.textWhite}>⬅️ Back to DBMS</Text>
+</TouchableOpacity>
           <Text style={styles.title}>Fieldo Operational Tracking Workspace</Text>
         </View>
         <Text style={styles.activeProfileLabel}>Selected Target: <Text style={{fontWeight: '900', color: '#38BDF8'}}>{activeName}</Text></Text>
@@ -230,7 +229,7 @@ export default function EmployeeTrackingWorkspace() {
 
       <View style={styles.mainContent}>
         
-        {/* 🟢 RESTORED LEFT SIDED QUICK SELECT EMPLOYEE LIST SIDEBAR */}
+        {/* SIDEBAR ROSTER INDEX */}
         <View style={styles.sidebar}>
           <Text style={styles.sidebarTitle}>Employee Directory</Text>
           <TextInput 
@@ -244,19 +243,19 @@ export default function EmployeeTrackingWorkspace() {
             {filteredSidebarRoster.map((emp) => {
               const isLiveNow = !!liveEmployees[emp.userId];
               const isSelected = activeUserId === emp.userId;
+              const displayName = emp.firstName || emp.name || 'Unnamed';
               
               return (
                 <TouchableOpacity
                   key={emp.userId}
                   style={[styles.empCard, isSelected && styles.empCardActive]}
                   onPress={() => {
-                    setActiveUserId(emp.userId);
-                    setActiveName(emp.firstName || emp.name);
+                    router.replace(`/tracking?userId=${emp.userId}&name=${displayName}`);
                   }}
                 >
                   <View style={[styles.statusDot, isLiveNow ? styles.statusDotLive : styles.statusDotIdle]} />
                   <Text style={[styles.empName, isSelected && styles.textLinkActive]} numberOfLines={1}>
-                    {emp.firstName || emp.name}
+                    {displayName}
                   </Text>
                   {isLiveNow && <Text style={styles.liveLabel}>LIVE</Text>}
                 </TouchableOpacity>
@@ -303,7 +302,7 @@ export default function EmployeeTrackingWorkspace() {
           </ScrollView>
         </View>
 
-        {/* INTERACTIVE LEAFLET DISPLAY MAP LAYER */}
+        {/* INTERACTIVE MAP FRAME */}
         <View style={styles.mapFrame}>
           {isLoadingRoute ? (
             <View style={styles.mapCenteredMsg}><Text style={styles.msgText}>Processing history metrics...</Text></View>
@@ -335,8 +334,6 @@ const styles = StyleSheet.create({
   activeProfileLabel: { color: '#94A3B8', fontSize: 13 },
   textWhite: { color: '#FFFFFF', fontWeight: '700', fontSize: 12 },
   mainContent: { flex: 1, flexDirection: 'row' },
-  
-  // Sidebar List Styles
   sidebar: { width: 230, backgroundColor: '#FFFFFF', borderRightWidth: 1, borderColor: '#E2E8F0', padding: 12 },
   sidebarTitle: { fontSize: 11, fontWeight: '800', color: '#64748B', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
   searchBarContainer: { backgroundColor: '#F8FAFC', paddingHorizontal: 10, paddingVertical: 8, borderRadius: 6, borderWidth: 1, borderColor: '#E2E8F0', fontSize: 13, color: '#1E293B', marginBottom: 12 },
@@ -348,7 +345,6 @@ const styles = StyleSheet.create({
   statusDotLive: { backgroundColor: '#22C55E' },
   statusDotIdle: { backgroundColor: '#94A3B8' },
   liveLabel: { fontSize: 9, fontWeight: '900', color: '#15803D', backgroundColor: '#DCFCE7', paddingHorizontal: 4, paddingVertical: 1, borderRadius: 3 },
-  
   historyPanel: { width: 320, borderRightWidth: 1, borderColor: '#E2E8F0', backgroundColor: '#F8FAFC', padding: 14, overflowY: 'auto' },
   panelHeading: { fontSize: 15, fontWeight: '800', color: '#1E293B', marginBottom: 8 },
   sectionSubHeading: { fontSize: 11, fontWeight: '800', color: '#64748B', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6, marginTop: 12 },
