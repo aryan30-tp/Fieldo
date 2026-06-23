@@ -33,11 +33,11 @@ export default function TrackerScreen() {
   const [routePoints, setRoutePoints] = useState([]);
 
   // 📝 EXTENDED CRM VISIT FORM STATES
-  const [clientName, setClientName] = useState(''); // Company Name
-  const [contactPerson, setContactPerson] = useState(''); // Person Met
-  const [personPosition, setPersonPosition] = useState(''); // Position (Optional)
-  const [personMobile, setPersonMobile] = useState(''); // Contact Mobile
-  const [summary, setSummary] = useState(''); // Discussion Summary
+  const [clientName, setClientName] = useState(''); 
+  const [contactPerson, setContactPerson] = useState(''); 
+  const [personPosition, setPersonPosition] = useState(''); 
+  const [personMobile, setPersonMobile] = useState(''); 
+  const [summary, setSummary] = useState(''); 
   const [isSubmittingNote, setIsSubmittingNote] = useState(false);
 
   // 1. Auth Listener & Profile Sync
@@ -67,7 +67,59 @@ export default function TrackerScreen() {
     return () => unsubscribe();
   }, [router]);
 
-  // handleNewLocationPoint, syncCachedPayloadsToServer remain the same as previous offline updates
+  // 🔒 ANTI-HIJACKING SINGLE-DEVICE HEARTBEAT LISTENER
+  useEffect(() => {
+    if (!user) return;
+
+    const checkDeviceSessionValidity = async () => {
+      try {
+        const localSessionId = await AsyncStorage.getItem('@fieldo_device_session_id');
+        if (!localSessionId) return;
+
+        const response = await fetch("https://fieldo.onrender.com/api/employees/verify-session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId: user.uid,
+            currentDeviceId: localSessionId
+          })
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          
+          if (data.valid === false) {
+            console.log("🚨 Multi-device session collision detected. Disconnecting client layer...");
+            
+            // Terminate background tracking streams completely
+            if (isTracking) {
+              if (locationSub) locationSub.remove();
+              if (await TaskManager.isTaskRegisteredAsync(BACKGROUND_LOCATION_TASK)) {
+                await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
+              }
+            }
+
+            await AsyncStorage.removeItem('@fieldo_device_session_id');
+            await auth.signOut();
+
+            Alert.alert(
+              "Session Terminated", 
+              "This account has been logged into on another device. Tracking has been stopped on this station.",
+              [{ text: "OK", onPress: () => router.replace('/') }]
+            );
+          }
+        }
+      } catch (err) {
+        console.log("Session token confirmation check bypassed (Phone working offline).");
+      }
+    };
+
+    checkDeviceSessionValidity();
+    const trackerHeartbeat = setInterval(checkDeviceSessionValidity, 30000); // Poll every 30 seconds
+
+    return () => clearInterval(trackerHeartbeat);
+  }, [user, isTracking, locationSub, router]);
+
   const handleNewLocationPoint = async (newPoint, latitude, longitude) => {
     if (!user) return;
     const state = await NetInfo.fetch();
@@ -146,7 +198,6 @@ export default function TrackerScreen() {
     return () => unsubscribe();
   }, [syncCachedPayloadsToServer]);
 
-  // Smart Boot Sync & Permission hooks
   useEffect(() => {
     const syncTrackingState = async () => {
       if (!user) return;
@@ -225,9 +276,7 @@ export default function TrackerScreen() {
     setLocationSub(sub);
   };
 
-  // 🚀 HIGHLY STRUCTURED CRM FIELD REPORT SUBMISSION
   const handleSubmitVisitNote = async () => {
-    // Structural validations: Person position left explicitly optional
     if (!clientName.trim() || !contactPerson.trim() || !personMobile.trim() || !summary.trim()) {
       Alert.alert("Missing Fields", "Please populate Company, Person Met, Mobile Number, and Summary details.");
       return;
@@ -247,11 +296,11 @@ export default function TrackerScreen() {
       const payload = {
         userId: user.uid,
         employeeName: user.email.split('@')[0],
-        clientName: clientName, // Company where he went
-        contactPerson: contactPerson, // Name of the person he met
-        personPosition: personPosition.trim() || '-', // Optional title description parameter
-        personMobile: personMobile, // Contact person mobile connection
-        summary: summary, // Discussion notes report
+        clientName: clientName, 
+        contactPerson: contactPerson, 
+        personPosition: personPosition.trim() || '-', 
+        personMobile: personMobile, 
+        summary: summary, 
         date: today,
         timestamp: Date.now()
       };
@@ -318,7 +367,6 @@ export default function TrackerScreen() {
             <Text style={styles.buttonText}>{isTracking ? 'Stop Tracking' : 'Start Tracking'}</Text>
           </Pressable>
 
-          {/* 🟢 UPGRADED EXTENDED HIGHLY-STRUCTURED SUBMISSION FORM FIELDS */}
           <View style={styles.formContainer}>
             <Text style={styles.formTitle}>📝 Detailed Field Report</Text>
             <TextInput style={styles.input} placeholder="Company Visited" placeholderTextColor="#64748B" value={clientName} onChangeText={setClientName} />

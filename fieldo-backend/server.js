@@ -27,21 +27,50 @@ mongoose.connect(MONGO_URI)
 
 // --- 1. EMPLOYEE ROSTER & MANAGEMENT ENDPOINTS ---
 
-// Sync Employee Profile on Login (Prevents overwriting rich data fields)
+// Sync Employee Profile on Login (With Single-Device Lock Logic integration)
 app.post('/api/employees/sync', async (req, res) => {
-  const { userId, name, email } = req.body;
+  const { userId, name, email, deviceId } = req.body;
   try {
+    const updatePayload = { email };
+    
+    // 🟢 Only apply session footprint overwrites if a specific deviceId token is passed
+    if (deviceId) {
+      updatePayload.currentDeviceId = deviceId;
+    }
+
     const employee = await Employee.findOneAndUpdate(
       { userId },
       { 
-        $set: { email },
+        $set: updatePayload,
         $setOnInsert: { firstName: name, empId: String(Date.now()).slice(-4) } 
       },
       { upsert: true, new: true }
     );
     res.status(200).json(employee);
   } catch (err) {
-    res.status(500).json({ error: "Failed to sync profile" });
+    res.status(500).json({ error: "Failed to sync profile and session token" });
+  }
+});
+
+// 🔒 NEW: SESSION FORCE PROTECTION ENDPOINT (Confirms phone fingerprint matches database active record)
+app.post('/api/employees/verify-session', async (req, res) => {
+  const { userId, currentDeviceId } = req.body;
+  
+  if (!userId || !currentDeviceId) {
+    return res.status(400).json({ error: "Missing tracking verification parameters." });
+  }
+
+  try {
+    const employee = await Employee.findOne({ userId }).lean();
+    if (!employee) {
+      return res.status(404).json({ error: "Employee profile entry not found." });
+    }
+
+    // Check if the device token matches the active db slot
+    const isSessionValid = employee.currentDeviceId === currentDeviceId;
+    res.status(200).json({ valid: isSessionValid, activeDevice: employee.currentDeviceId || 'Unknown' });
+  } catch (err) {
+    res.status(500).json({ error: "Internal validation framework error." });
   }
 });
 
@@ -257,7 +286,7 @@ app.get('/api/attendance/:userId', async (req, res) => {
 
 // --- 4. CRM VISIT NOTES & MEETING SUMMARIES ---
 
-// 🟢 UPGRADED EXTENDED FIELD NOTE LOG ENGINE
+// UPGRADED EXTENDED FIELD NOTE LOG ENGINE
 app.post('/api/visits', async (req, res) => {
   const { userId, employeeName, clientName, contactPerson, personPosition, personMobile, summary, lat, lng } = req.body;
   const today = new Date().toISOString().split('T')[0];
@@ -352,7 +381,7 @@ app.post('/api/routes/sync-offline', async (req, res) => {
   }
 });
 
-// 🟢 UPGRADED EXTENDED OFFLINE VISITS BATCH PROXY
+// UPGRADED EXTENDED OFFLINE VISITS BATCH PROXY
 app.post('/api/visits/sync-offline', async (req, res) => {
   const { visits } = req.body;
 
@@ -395,6 +424,17 @@ io.on('connection', (socket) => {
   socket.on('register', (data) => {
     socket.userId = data.userId;
     console.log(`🆔 Socket registered user: ${data.userId}`);
+  });
+
+  // 🟢 NEW MULTI-DEVICE PORTAL SYNC BROADCASTS
+  // Broadcasts a real-time message when an inline profile edit is executed by an admin
+  socket.on('hr-employee-updated', (updatedEmployee) => {
+    socket.broadcast.emit('ui-sync-employee-updated', updatedEmployee);
+  });
+
+  // Broadcasts a cascade sync notice when a field employee profile is deleted completely
+  socket.on('hr-employee-deleted', (employeeId) => {
+    socket.broadcast.emit('ui-sync-employee-deleted', employeeId);
   });
 
   socket.on('location-update', async (data) => {

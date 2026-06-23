@@ -4,11 +4,15 @@ import { useRouter } from 'expo-router';
 import { signOut } from 'firebase/auth';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../../src/services/firebaseConfig';
+import io from 'socket.io-client'; // 1. Imported Socket client cleanly
 
 let WebMap = null;
 if (Platform.OS === 'web') {
   WebMap = require('../../src/components/WebMap').default;
 }
+
+// 2. Establish global socket pipeline link targeting your live cluster engine
+const socket = io("https://fieldo.onrender.com");
 
 export default function HRMonolithicControlHub() {
   const router = useRouter();
@@ -71,9 +75,31 @@ export default function HRMonolithicControlHub() {
     }
   }, []);
 
+  // 3. Multi-Device Real-Time Synchronization Listener Hooks Effect
   useEffect(() => {
     setIsClient(true);
     fetchMasterData();
+
+    // Catch inline modifications performed by alternate admins instantly
+    socket.on('ui-sync-employee-updated', (updatedEmployee) => {
+      setRoster((prevRoster) =>
+        prevRoster.map(emp => emp._id === updatedEmployee._id ? { ...emp, ...updatedEmployee } : emp)
+      );
+    });
+
+    // Intercept wipe requests executed from alternate terminal dashboards safely
+    socket.on('ui-sync-employee-deleted', (employeeId) => {
+      setRoster((prevRoster) => prevRoster.filter(emp => emp._id !== employeeId));
+      
+      // If the currently viewed target user was wiped out, revert workspace back to grid view safely
+      setSelectedUser(prev => {
+        if (prev.id === employeeId) {
+          setCurrentTab('dbms');
+          return { id: null, name: '' };
+        }
+        return prev;
+      });
+    });
 
     const unsubscribe = onSnapshot(collection(db, 'daily_routes'), (snapshot) => {
       const liveMap = {};
@@ -90,7 +116,12 @@ export default function HRMonolithicControlHub() {
       });
       setLiveEmployees(liveMap);
     });
-    return () => unsubscribe();
+
+    return () => {
+      unsubscribe();
+      socket.off('ui-sync-employee-updated');
+      socket.off('ui-sync-employee-deleted');
+    };
   }, [fetchMasterData]);
 
   useEffect(() => {
@@ -131,10 +162,16 @@ export default function HRMonolithicControlHub() {
         body: JSON.stringify({ ...formData, password: 'employee' })
       });
       if (response.ok) {
+        const data = await response.json();
         alert("Employee account provisioned successfully!");
         setIsModalOpen(false);
         setFormData({ empId: '', firstName: '', lastName: '', area: '', email: '', mobile: '' });
+        
+        // Optimistic UI updates local layout, then fires broad reload sequence
         fetchMasterData();
+        
+        // 🟢 Tell server to update all other matching active windows
+        if (data.employee) socket.emit('hr-employee-updated', data.employee);
       } else {
         alert("Provisioning failed. Check for duplicate IDs or emails.");
       }
@@ -152,7 +189,16 @@ export default function HRMonolithicControlHub() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(editFields)
       });
-      if (res.ok) { setEditingRowId(null); fetchMasterData(); }
+      if (res.ok) {
+        const data = await res.json();
+        setEditingRowId(null);
+        
+        // Apply immediate update locally
+        setRoster(prev => prev.map(emp => emp._id === id ? { ...emp, ...data.employee } : emp));
+        
+        // 🟢 Broadcast updated object matrix straight to everyone else
+        if (data.employee) socket.emit('hr-employee-updated', data.employee);
+      }
     } catch (err) { console.error(err); }
   };
 
@@ -160,7 +206,13 @@ export default function HRMonolithicControlHub() {
     if (!confirm("Delete record entry and revoke app access permissions permanently?")) return;
     try {
       const response = await fetch(`https://fieldo.onrender.com/api/hr/employees/${id}`, { method: 'DELETE' });
-      if (response.ok) fetchMasterData();
+      if (response.ok) {
+        // Drop profile element locally instantly
+        setRoster(prev => prev.filter(emp => emp._id !== id));
+        
+        // 🟢 Broadcast deletion message key across server pipeline link to flush other views
+        socket.emit('hr-employee-deleted', id);
+      }
     } catch (err) {
       console.error(err);
     }
@@ -193,7 +245,6 @@ export default function HRMonolithicControlHub() {
       const dayString = `${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
       const hoursLogged = attendanceMap[dayString] || 0;
       
-      // 🟢 CHANGED THRESHOLD: Must hit 4 hours logged to trigger a green present dot indicator
       const isPresent = hoursLogged >= 4.0;
       const hasRecord = attendanceMap[dayString] !== undefined;
 
@@ -343,7 +394,6 @@ export default function HRMonolithicControlHub() {
           </View>
         ) : (
           <View style={styles.workspaceSplit}>
-            {/* VIEWPORT B: TIMELINE HISTORY METRICS & MAP SEGMENT PLOTTER */}
             <View style={styles.historyPanel}>
               <Text style={styles.panelHeading}>📊 Logs: {selectedUser.name}</Text>
               
@@ -361,7 +411,6 @@ export default function HRMonolithicControlHub() {
               </ScrollView>
               
               <Text style={styles.sectionSubHeading}>CRM Client Visit Summaries</Text>
-              {/* 🟢 FIXED SPACE LAYOUT: Set to flex: 1 with an unconstrained maxHeight to lock cleanly with map boundaries */}
               <ScrollView style={[styles.listBlock, { flex: 1, maxHeight: undefined }]} nestedScrollEnabled showsVerticalScrollIndicator={false}>
                 {visitNotes.map((n,i) => (
                   <View key={i} style={styles.noteCard}>
