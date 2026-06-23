@@ -100,7 +100,7 @@ app.get('/api/hr/employees', async (req, res) => {
 
           const activeHours = activeTrackingMs / 3600000;
           
-          // 🟢 NEW ACCURATE THRESHOLD: Must achieve at least 4.0 active hours to be counted as present
+          // 🟢 ACCURATE PRESENCE THRESHOLD: Must achieve at least 4.0 active hours to be counted as present
           if (activeHours >= 4.0) {
             daysPresentCount++;
           }
@@ -227,15 +227,11 @@ app.get('/api/attendance/:userId', async (req, res) => {
         return { date: session.date, startedAt: null, endedAt: session.lastPing, hoursLogged: 0 };
       }
 
-      // Sort points chronologically to ensure timeline calculation safety
       const sortedPoints = [...session.points].sort((a, b) => a.timestamp - b.timestamp);
       let totalTrackingActiveMs = 0;
 
-      // Loop through coordinates and accumulate time ONLY if updates are consecutive (within 5 minutes)
       for (let i = 1; i < sortedPoints.length; i++) {
         const delta = sortedPoints[i].timestamp - sortedPoints[i - 1].timestamp;
-        
-        // If the gap is less than 5 minutes, add it to active working time
         if (delta > 0 && delta <= 5 * 60 * 1000) {
           totalTrackingActiveMs += delta;
         }
@@ -247,7 +243,7 @@ app.get('/api/attendance/:userId', async (req, res) => {
         date: session.date,
         startedAt: sortedPoints[0].timestamp,
         endedAt: session.lastPing,
-        hoursLogged: parseFloat(activeHours.toFixed(2)) // Returns exact time tracked
+        hoursLogged: parseFloat(activeHours.toFixed(2))
       };
     });
 
@@ -313,7 +309,76 @@ app.get('/api/routes/:userId/:date', async (req, res) => {
 });
 
 
-// --- WEBSOCKET REAL-TIME PIPELINE ---
+// --- 6. ADVANCED OFFLINE BATCH SYNCHRONIZATION ENGINE ---
+
+// 🟢 OFFLINE SYNC ENDPOINT: Saves a bulk array of coordinates collected while offline
+app.post('/api/routes/sync-offline', async (req, res) => {
+  const { userId, name, date, points } = req.body;
+
+  if (!userId || !date || !Array.isArray(points) || points.length === 0) {
+    return res.status(400).json({ error: "Invalid sync payload parameters." });
+  }
+
+  try {
+    const verifiedPoints = points
+      .filter(p => p && typeof p.lat === 'number' && typeof p.lng === 'number' && p.timestamp)
+      .sort((a, b) => a.timestamp - b.timestamp);
+
+    if (verifiedPoints.length === 0) {
+      return res.status(400).json({ error: "No valid coordinate nodes found." });
+    }
+
+    const latestPing = verifiedPoints[verifiedPoints.length - 1].timestamp;
+
+    await Route.updateOne(
+      { userId, date },
+      {
+        $set: { name, lastPing: latestPing },
+        $push: { points: { $each: verifiedPoints } }
+      },
+      { upsert: true }
+    );
+
+    console.log(`📥 Successfully synced ${verifiedPoints.length} offline tracking points for user: ${userId}`);
+    res.status(200).json({ success: true, message: "Offline sync completed successfully." });
+  } catch (err) {
+    console.error("Offline sync database crash:", err);
+    res.status(500).json({ error: "Failed to clear local batch pool to cloud database." });
+  }
+});
+
+// 🟢 OFFLINE VISITS SYNC ENDPOINT: Processes a bulk batch of CRM reports logged while offline
+app.post('/api/visits/sync-offline', async (req, res) => {
+  const { visits } = req.body;
+
+  if (!Array.isArray(visits) || visits.length === 0) {
+    return res.status(400).json({ error: "Invalid visit sync payload parameters." });
+  }
+
+  try {
+    const formattedVisits = visits.map(v => ({
+      userId: v.userId,
+      employeeName: v.employeeName,
+      date: v.date || new Date().toISOString().split('T')[0],
+      clientName: v.clientName,
+      summary: v.summary,
+      lat: v.lat || 0,
+      lng: v.lng || 0,
+      timestamp: v.timestamp || Date.now()
+    }));
+
+    await Visit.insertMany(formattedVisits);
+    console.log(`📥 Successfully flushed ${formattedVisits.length} cached field reports to Atlas CRM matrix.`);
+    
+    res.status(200).json({ success: true, message: "Bulk visit notes synced successfully." });
+  } catch (err) {
+    console.error("Bulk visit sync processing crash:", err);
+    res.status(500).json({ error: "Database rejected bulk visit cache payload." });
+  }
+});
+
+
+// --- 7. WEBSOCKET REAL-TIME PIPELINE ---
 const locationBuffers = {};
 
 io.on('connection', (socket) => {
@@ -361,72 +426,3 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`🚀 Complete Enterprise API running on port ${PORT}`));
-
-// 🟢 OFFLINE SYNC ENDPOINT: Saves a bulk array of coordinates collected while offline
-app.post('/api/routes/sync-offline', async (req, res) => {
-  const { userId, name, date, points } = req.body;
-
-  if (!userId || !date || !Array.isArray(points) || points.length === 0) {
-    return res.status(400).json({ error: "Invalid sync payload parameters." });
-  }
-
-  try {
-    // Clean and sort the inbound points chronologically
-    const verifiedPoints = points
-      .filter(p => p && typeof p.lat === 'number' && typeof p.lng === 'number' && p.timestamp)
-      .sort((a, b) => a.timestamp - b.timestamp);
-
-    if (verifiedPoints.length === 0) {
-      return res.status(400).json({ error: "No valid coordinate nodes found." });
-    }
-
-    const latestPing = verifiedPoints[verifiedPoints.length - 1].timestamp;
-
-    // Bulk push the points array directly into the database row for that date
-    await Route.updateOne(
-      { userId, date },
-      {
-        $set: { name, lastPing: latestPing },
-        $push: { points: { $each: verifiedPoints } }
-      },
-      { upsert: true }
-    );
-
-    console.log(`📥 Successfully synced ${verifiedPoints.length} offline tracking points for user: ${userId}`);
-    res.status(200).json({ success: true, message: "Offline sync completed successfully." });
-  } catch (err) {
-    console.error("Offline sync database crash:", err);
-    res.status(500).json({ error: "Failed to clear local batch pool to cloud database." });
-  }
-});
-
-// 🟢 OFFLINE VISITS SYNC ENDPOINT: Processes a bulk batch of CRM reports logged while offline
-app.post('/api/visits/sync-offline', async (req, res) => {
-  const { visits } = req.body;
-
-  if (!Array.isArray(visits) || visits.length === 0) {
-    return res.status(400).json({ error: "Invalid visit sync payload parameters." });
-  }
-
-  try {
-    // Format the bulk entries for MongoDB insertMany rules
-    const formattedVisits = visits.map(v => ({
-      userId: v.userId,
-      employeeName: v.employeeName,
-      date: v.date || new Date().toISOString().split('T')[0],
-      clientName: v.clientName,
-      summary: v.summary,
-      lat: v.lat || 0,
-      lng: v.lng || 0,
-      timestamp: v.timestamp || Date.now()
-    }));
-
-    await Visit.insertMany(formattedVisits);
-    console.log(`📥 Successfully flushed ${formattedVisits.length} cached field reports to Atlas CRM matrix.`);
-    
-    res.status(200).json({ success: true, message: "Bulk visit notes synced successfully." });
-  } catch (err) {
-    console.error("Bulk visit sync processing crash:", err);
-    res.status(500).json({ error: "Database rejected bulk visit cache payload." });
-  }
-});
