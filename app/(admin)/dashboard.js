@@ -4,14 +4,14 @@ import { useRouter } from 'expo-router';
 import { signOut } from 'firebase/auth';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../../src/services/firebaseConfig';
-import io from 'socket.io-client'; // 1. Imported Socket client cleanly
+import io from 'socket.io-client';
 
 let WebMap = null;
 if (Platform.OS === 'web') {
   WebMap = require('../../src/components/WebMap').default;
 }
 
-// 2. Establish global socket pipeline link targeting your live cluster engine
+// Establish global socket pipeline link targeting your live server engine
 const socket = io("https://fieldo.onrender.com");
 
 export default function HRMonolithicControlHub() {
@@ -46,12 +46,31 @@ export default function HRMonolithicControlHub() {
   const [editingRowId, setEditingRowId] = useState(null);
   const [editFields, setEditFields] = useState({ email: '', mobile: '' });
 
+  // 🟢 NEW: ENTERPRISE OVERLAY STATES (Notifications & Destructive Actions)
+  const [notifications, setNotifications] = useState([]);
+  const [isNotifOpen, setIsNotifOpen] = useState(false);
+  const [expandedNotifId, setExpandedNotifId] = useState(null);
+  
+  const [isNukeModalOpen, setIsNukeModalOpen] = useState(false);
+  const [nukeConfirmText, setNukeConfirmText] = useState('');
+  const [isNuking, setIsNuking] = useState(false);
+
   const fetchMasterData = useCallback(async () => {
     try {
       const response = await fetch('https://fieldo.onrender.com/api/hr/employees');
       if (!response.ok) throw new Error();
       const data = await response.json();
       setRoster(data || []);
+    } catch (err) {
+      console.error(err);
+    }
+  }, []);
+
+  // 🟢 NEW: Gather all open field issues logged by mobile operators
+  const fetchNotifications = useCallback(async () => {
+    try {
+      const res = await fetch('https://fieldo.onrender.com/api/notifications');
+      if (res.ok) setNotifications(await res.json());
     } catch (err) {
       console.error(err);
     }
@@ -75,23 +94,20 @@ export default function HRMonolithicControlHub() {
     }
   }, []);
 
-  // 3. Multi-Device Real-Time Synchronization Listener Hooks Effect
+  // Multi-Device Real-Time Synchronization Listener Hooks Effect
   useEffect(() => {
     setIsClient(true);
     fetchMasterData();
+    fetchNotifications();
 
-    // Catch inline modifications performed by alternate admins instantly
     socket.on('ui-sync-employee-updated', (updatedEmployee) => {
       setRoster((prevRoster) =>
         prevRoster.map(emp => emp._id === updatedEmployee._id ? { ...emp, ...updatedEmployee } : emp)
       );
     });
 
-    // Intercept wipe requests executed from alternate terminal dashboards safely
     socket.on('ui-sync-employee-deleted', (employeeId) => {
       setRoster((prevRoster) => prevRoster.filter(emp => emp._id !== employeeId));
-      
-      // If the currently viewed target user was wiped out, revert workspace back to grid view safely
       setSelectedUser(prev => {
         if (prev.id === employeeId) {
           setCurrentTab('dbms');
@@ -99,6 +115,25 @@ export default function HRMonolithicControlHub() {
         }
         return prev;
       });
+    });
+
+    // 🟢 NEW: Catch real-time workspace alert broadcasts across endpoints
+    socket.on('ui-sync-notification-received', (newNotif) => {
+      setNotifications(prev => [newNotif, ...prev]);
+    });
+
+    socket.on('ui-sync-notification-wiped', (notifId) => {
+      setNotifications(prev => prev.filter(n => n._id !== notifId));
+      setExpandedNotifId(currentId => currentId === notifId ? null : currentId);
+    });
+
+    socket.on('ui-sync-system-nuked', () => {
+      alert("🚨 A master wipe command has been executed on another admin terminal. Flushing interface baseline...");
+      setRoster([]);
+      setNotifications([]);
+      setLiveEmployees({});
+      setCurrentTab('dbms');
+      setSelectedUser({ id: null, name: '' });
     });
 
     const unsubscribe = onSnapshot(collection(db, 'daily_routes'), (snapshot) => {
@@ -121,8 +156,11 @@ export default function HRMonolithicControlHub() {
       unsubscribe();
       socket.off('ui-sync-employee-updated');
       socket.off('ui-sync-employee-deleted');
+      socket.off('ui-sync-notification-received');
+      socket.off('ui-sync-notification-wiped');
+      socket.off('ui-sync-system-nuked');
     };
-  }, [fetchMasterData]);
+  }, [fetchMasterData, fetchNotifications]);
 
   useEffect(() => {
     if (selectedUser.id) {
@@ -166,11 +204,7 @@ export default function HRMonolithicControlHub() {
         alert("Employee account provisioned successfully!");
         setIsModalOpen(false);
         setFormData({ empId: '', firstName: '', lastName: '', area: '', email: '', mobile: '' });
-        
-        // Optimistic UI updates local layout, then fires broad reload sequence
         fetchMasterData();
-        
-        // 🟢 Tell server to update all other matching active windows
         if (data.employee) socket.emit('hr-employee-updated', data.employee);
       } else {
         alert("Provisioning failed. Check for duplicate IDs or emails.");
@@ -192,11 +226,7 @@ export default function HRMonolithicControlHub() {
       if (res.ok) {
         const data = await res.json();
         setEditingRowId(null);
-        
-        // Apply immediate update locally
         setRoster(prev => prev.map(emp => emp._id === id ? { ...emp, ...data.employee } : emp));
-        
-        // 🟢 Broadcast updated object matrix straight to everyone else
         if (data.employee) socket.emit('hr-employee-updated', data.employee);
       }
     } catch (err) { console.error(err); }
@@ -205,16 +235,57 @@ export default function HRMonolithicControlHub() {
   const handleDeleteEmployee = async (id) => {
     if (!confirm("Delete record entry and revoke app access permissions permanently?")) return;
     try {
-      const response = await fetch(`https://fieldo.onrender.com/api/hr/employees/${id}`, { method: 'DELETE' });
+      const response = await fetch('https://fieldo.onrender.com/api/hr/employees/' + id, { method: 'DELETE' });
       if (response.ok) {
-        // Drop profile element locally instantly
         setRoster(prev => prev.filter(emp => emp._id !== id));
-        
-        // 🟢 Broadcast deletion message key across server pipeline link to flush other views
         socket.emit('hr-employee-deleted', id);
       }
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  // 🟢 NEW: Clear alert profiles out of the system once fixed
+  const handleResolveNotification = async (id) => {
+    try {
+      const response = await fetch(`https://fieldo.onrender.com/api/notifications/${id}`, { method: 'DELETE' });
+      if (response.ok) {
+        setNotifications(prev => prev.filter(n => n._id !== id));
+        setExpandedNotifId(null);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  // 🟢 NEW: DESTRUCTIVE SYSTEM RESET PIPELINE EXECUTION
+  const handleExecuteMasterSystemNuke = async () => {
+    if (nukeConfirmText !== "delete") {
+      alert("Verification mismatched. Action rejected.");
+      return;
+    }
+    setIsNuking(true);
+    try {
+      const res = await fetch("https://fieldo.onrender.com/api/system/nuke-reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmToken: "MASTER_DELETE_CONFIRMED" })
+      });
+      if (res.ok) {
+        alert("Database structure successfully reset to baseline zero configuration.");
+        setRoster([]);
+        setNotifications([]);
+        setIsNukeModalOpen(false);
+        setNukeConfirmText('');
+        setCurrentTab('dbms');
+        setSelectedUser({ id: null, name: '' });
+      } else {
+        alert("Master server rejected token authorization codes.");
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsNuking(false);
     }
   };
 
@@ -281,19 +352,42 @@ export default function HRMonolithicControlHub() {
 
   return (
     <View style={styles.container}>
-      {/* HEADER NAVBAR CONTAINER */}
+      {/* 🟢 OVERHAULED INTEGRATED NAVBAR HEADER BLOCK */}
       <View style={styles.header}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 20 }}>
+          {/* Shared Enterprise Vector Minimalist Branding Identity logo */}
+          <View style={styles.webBrandGroup}>
+            <View style={styles.webLogoWrapper}>
+              <View style={styles.webLogoInnerDot} />
+            </View>
+            <Text style={styles.webBrandLogotype}>FIELDO</Text>
+            <View style={styles.badgeHubStation}><Text style={styles.badgeHubText}>HR STATION</Text></View>
+          </View>
+
           {currentTab === 'tracking' && (
             <TouchableOpacity style={styles.backBtn} onPress={() => setCurrentTab('dbms')}>
               <Text style={styles.textWhite}>📋 Show Master Table Records</Text>
             </TouchableOpacity>
           )}
-          <Text style={styles.title}>Fieldo Workspace Hub — Admin Station</Text>
         </View>
-        <TouchableOpacity style={styles.logoutButton} onPress={async () => { await signOut(auth); router.replace('/login'); }}>
-          <Text style={styles.textWhite}>Logout</Text>
-        </TouchableOpacity>
+
+        {/* 🟢 RIGHT HEADER TOOL ACTIONS: Notifications Bell, Nuke Trigger, & Session drop handlers */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+          {/* Notification Alert Launcher Bell */}
+          <TouchableOpacity style={[styles.toolbarCircleBtn, notifications.length > 0 && styles.bellAlertPulseActive]} onPress={() => setIsNotifOpen(true)}>
+            <Text style={{ fontSize: 16 }}>🔔</Text>
+            {notifications.length > 0 && <View style={styles.badgeCountOverlay}><Text style={styles.badgeCountText}>{notifications.length}</Text></View>}
+          </TouchableOpacity>
+
+          {/* Master Reset Pipeline Destructive Action Launcher Button */}
+          <TouchableOpacity style={[styles.toolbarCircleBtn, styles.dangerBorderCircle]} onPress={() => setIsNukeModalOpen(true)}>
+            <Text style={{ fontSize: 14 }}>💥</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.logoutButton} onPress={async () => { await signOut(auth); router.replace('/login'); }}>
+            <Text style={styles.textWhite}>Logout</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       <View style={styles.mainContent}>
@@ -351,7 +445,8 @@ export default function HRMonolithicControlHub() {
                   <Text style={[styles.th, { width: 130 }]}>Freq Client 3</Text>
                   <Text style={[styles.th, { width: 200 }]}>Corporate Email</Text>
                   <Text style={[styles.th, { width: 140 }]}>Mobile Phone</Text>
-                  <Text style={[styles.th, { width: 110, textAlign: 'center' }]}>Month Days</Text>
+                  <Text style={[styles.th, { width: 120, textAlign: 'center' }]}>Month Distance</Text> {/* 🟢 Live Column Added */}
+                  <Text style={[styles.th, { width: 100, textAlign: 'center' }]}>Month Days</Text>
                   <Text style={[styles.th, { width: 240, textAlign: 'center' }]}>Actions Control</Text>
                 </View>
                 <ScrollView style={{ flex: 1 }}>
@@ -370,7 +465,8 @@ export default function HRMonolithicControlHub() {
                         <Text style={[styles.td, { width: 130 }]}>{emp.freqClient3 || '-'}</Text>
                         {isEditing ? <TextInput style={[styles.inlineInput, { width: 190 }]} value={editFields.email} onChangeText={t=>setEditFields({...editFields, email:t})} /> : <Text style={[styles.td, { width: 200, fontSize: 12 }]}>{emp.email}</Text>}
                         {isEditing ? <TextInput style={[styles.inlineInput, { width: 130 }]} value={editFields.mobile} onChangeText={t=>setEditFields({...editFields, mobile:t})} /> : <Text style={[styles.td, { width: 140 }]}>{emp.mobile || '-'}</Text>}
-                        <Text style={[styles.td, { width: 110, textAlign: 'center', color: '#22C55E', fontWeight: '800' }]}>{emp.daysPresent} Days</Text>
+                        <Text style={[styles.td, { width: 120, textAlign: 'center', color: '#3B82F6', fontWeight: '800' }]}>{emp.totalDistance || 0.00} km</Text> {/* 🟢 Distance mapping integrated */}
+                        <Text style={[styles.td, { width: 100, textAlign: 'center', color: '#22C55E', fontWeight: '800' }]}>{emp.daysPresent} Days</Text>
                         <View style={{ width: 240, flexDirection: 'row', gap: 6, justifyContent: 'center' }}>
                           {isEditing ? (
                             <>
@@ -455,13 +551,93 @@ export default function HRMonolithicControlHub() {
         </View>
       </Modal>
 
+      {/* 🟢 NEW: SLIDEOUT ACTIVE NOTIFICATIONS PANEL SIDEBOARD SYSTEM */}
+      <Modal visible={isNotifOpen} animationType="slide" transparent>
+        <View style={styles.sidebarModalBackdropRightLayout}>
+          <Pressable style={{ flex: 1 }} onPress={() => setIsNotifOpen(false)} />
+          <View style={styles.rightFlyoutPanelContentWrapper}>
+            <View style={styles.panelTitleHeaderContainerRow}>
+              <Text style={styles.panelTitleLabelText}>⚠️ Field Diagnostic Issues</Text>
+              <TouchableOpacity style={styles.closeModalCrossIconBtn} onPress={() => setIsNotifOpen(false)}><Text style={{ color: '#94A3B8', fontWeight: '800' }}>✕</Text></TouchableOpacity>
+            </View>
+
+            <ScrollView contentContainerStyle={{ gap: 10, paddingVertical: 10 }} showsVerticalScrollIndicator={false}>
+              {notifications.map((notif) => {
+                const isExpanded = expandedNotifId === notif._id;
+                return (
+                  <TouchableOpacity key={notif._id} style={[styles.notifCardContainerItem, isExpanded && styles.notifCardItemExpandedBackground]} onPress={() => setExpandedNotifId(isExpanded ? null : notif._id)}>
+                    <Text style={styles.notifCardSenderLabel}>From: {notif.employeeName || 'Operator'}</Text>
+                    <Text style={styles.notifCardSubjectText}>📌 {notif.subject}</Text>
+                    <Text style={styles.notifCardTimestampText}>{new Date(notif.timestamp).toLocaleTimeString()}</Text>
+
+                    {isExpanded && (
+                      <View style={styles.notifCardExpandedPaneDetails}>
+                        <Text style={styles.notifCardDescriptionBodyText}>{notif.description}</Text>
+                        <View style={{ flexDirection: 'row', gap: 8, marginTop: 10, justifyContent: 'flex-end' }}>
+                          <TouchableOpacity style={styles.notifBtnKeep} onPress={() => setExpandedNotifId(null)}><Text style={{ color: '#475569', fontSize: 12, fontWeight: '700' }}>Keep</Text></TouchableOpacity>
+                          <TouchableOpacity style={styles.notifBtnSolved} onPress={() => handleResolveNotification(notif._id)}><Text style={{ color: '#FFFFFF', fontSize: 12, fontWeight: '700' }}>Solved</Text></TouchableOpacity>
+                        </View>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+              {notifications.length === 0 && <Text style={styles.emptyNotifsTextFallbackStyle}>No diagnostic tickets logged in loop streams.</Text>}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* 🟢 NEW: MASTER NUCLEAR SYSTEM RESET ENFORCEMENT PROTOCOL MODAL */}
+      <Modal visible={isNukeModalOpen} animationType="fade" transparent>
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalFormContent, { width: 380, gap: 14, borderColor: '#EF4444', borderWidth: 1 }]}>
+            <Text style={{ fontSize: 16, fontWeight: '900', color: '#EF4444' }}>⚠️ CRITICAL RECOVERY PROTOCOL HARD RESET</Text>
+            <Text style={{ fontSize: 13, color: '#475569', lineHeight: 18 }}>
+              This operation is completely destructive and non-reversible. Executing this will permanently drop all registered employees, shift routes, client entries, and logs.
+            </Text>
+            <Text style={{ fontSize: 13, fontWeight: '700', color: '#1E293B' }}>
+              To proceed, verify your identity parameters by typing the signature string text <Text style={{ color: '#EF4444' }}>"delete"</Text> below:
+            </Text>
+
+            <TextInput 
+              style={[styles.formInput, { borderColor: '#EF4444', textTransform: 'lowercase' }]} 
+              placeholder="Type delete to confirm..." 
+              placeholderTextColor="#94A3B8"
+              value={nukeConfirmText}
+              onChangeText={setNukeConfirmText}
+              editable={!isNuking}
+            />
+
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
+              <Button title="Cancel" onPress={() => { setIsNukeModalOpen(false); setNukeConfirmText(''); }} color="#64748B" disabled={isNuking} />
+              <Button title={isNuking ? "Wiping Node Layers..." : "Wipe Cloud Infrastructure"} onPress={handleExecuteMasterSystemNuke} color="#EF4444" disabled={isNuking || nukeConfirmText !== 'delete'} />
+            </View>
+          </View>
+        </View>
+      </Modal>
+
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8FAFC' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingVertical: 14, backgroundColor: '#0F172A' },
+  
+  // 🟢 NEW VECTOR STATIONS EMBEDDED BRANDING HEADER NAVBAR RULES
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingVertical: 14, backgroundColor: '#0F172A', borderBottomWidth: 1, borderColor: '#1E293B' },
+  webBrandGroup: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  webLogoWrapper: { width: 22, height: 22, borderRadius: 6, backgroundColor: '#3B82F6', justifyContent: 'center', alignItems: 'center' },
+  webLogoInnerDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#FFFFFF' },
+  webBrandLogotype: { color: '#FFFFFF', fontSize: 16, fontWeight: '900', letterSpacing: 2 },
+  badgeHubStation: { backgroundColor: 'rgba(59, 130, 246, 0.15)', borderWidth: 1, borderColor: '#3B82F6', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  badgeHubText: { color: '#3B82F6', fontSize: 10, fontWeight: '800' },
+  toolbarCircleBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#1E293B', alignItems: 'center', justifyContent: 'center', borderContext: 'none', position: 'relative' },
+  dangerBorderCircle: { borderColor: 'rgba(239, 68, 68, 0.4)', borderWidth: 1 },
+  badgeCountOverlay: { position: 'absolute', top: -4, right: -4, backgroundColor: '#EF4444', minWidth: 16, height: 16, borderRadius: 8, paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center' },
+  badgeCountText: { color: '#FFFFFF', fontSize: 9, fontWeight: '900' },
+  bellAlertPulseActive: { borderColor: '#F59E0B', borderWidth: 1, backgroundColor: 'rgba(245, 158, 11, 0.1)' },
+
   title: { fontSize: 16, fontWeight: '900', color: '#F8FAFC' },
   backBtn: { backgroundColor: '#334155', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 },
   logoutButton: { backgroundColor: '#EF4444', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 },
@@ -521,7 +697,25 @@ const styles = StyleSheet.create({
   indicatorDot: { width: 4, height: 4, borderRadius: 2, marginTop: 2 },
   dotPresent: { backgroundColor: '#22C55E' },
   dotAbsent: { backgroundColor: '#EF4444' },
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center' },
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', zIndex: 99 },
   modalFormContent: { backgroundColor: '#FFF', padding: 20, borderRadius: 12, width: 360, gap: 10 },
-  formInput: { backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0', padding: 8, borderRadius: 6, fontSize: 13, color: '#1E293B' }
+  formInput: { backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0', padding: 8, borderRadius: 6, fontSize: 13, color: '#1E293B' },
+
+  // 🟢 NEW SLIDEOUT NOTIFICATIONS LAYER SIDE PANEL STYLING BLOCKS
+  sidebarSampleOverlay: { flex: 1 },
+  sidebarModalBackdropRightLayout: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.4)', flexDirection: 'row', zIndex: 100 },
+  rightFlyoutPanelContentWrapper: { width: 340, height: '100%', backgroundColor: '#FFFFFF', borderLeftWidth: 1, borderColor: '#E2E8F0', padding: 20, gap: 12 },
+  panelTitleHeaderContainerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderBottomWidth: 1, borderColor: '#F1F5F9', paddingBottom: 12 },
+  panelTitleLabelText: { fontSize: 15, fontWeight: '900', color: '#0F172A' },
+  closeModalCrossIconBtn: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' },
+  notifCardContainerItem: { backgroundColor: '#F8FAFC', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#E2E8F0', cursor: 'pointer' },
+  notifCardItemExpandedBackground: { borderColor: '#3B82F6', backgroundColor: '#EFF6FF' },
+  notifCardSenderLabel: { fontSize: 11, fontWeight: '800', color: '#64748B', textTransform: 'uppercase' },
+  notifCardSubjectText: { fontSize: 13, fontWeight: '700', color: '#1E293B', marginTop: 4 },
+  notifCardTimestampText: { fontSize: 10, color: '#94A3B8', marginTop: 2, textAlign: 'right' },
+  notifCardExpandedPaneDetails: { marginTop: 10, borderTopWidth: 1, borderColor: '#E2E8F0', paddingTop: 10 },
+  notifCardDescriptionBodyText: { fontSize: 13, color: '#334155', lineHeight: 18 },
+  notifBtnKeep: { backgroundColor: '#E2E8F0', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 4 },
+  notifBtnSolved: { backgroundColor: '#22C55E', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 4 },
+  emptyNotifsTextFallbackStyle: { fontSize: 12, color: '#94A3B8', fontStyle: 'italic', textAlign: 'center', marginTop: 30 }
 });

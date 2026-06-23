@@ -4,10 +4,54 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 const mongoose = require('mongoose');
 
-// Import Schemas
-const Route = require('./models/Route');
-const Visit = require('./models/Visit');
-const Employee = require('./models/Employee');
+// --- DATABASE SCHEMAS & MODELS ---
+const RouteSchema = new mongoose.Schema({
+  userId: String,
+  name: String,
+  date: String,
+  points: [{ lat: Number, lng: Number, timestamp: Number }],
+  lastPing: Number,
+  isActive: Boolean
+});
+const Route = mongoose.model('Route', RouteSchema);
+
+const VisitSchema = new mongoose.Schema({
+  userId: String,
+  employeeName: String,
+  date: String,
+  clientName: String,
+  contactPerson: String,
+  personPosition: String,
+  personMobile: String,
+  summary: String,
+  lat: Number,
+  lng: Number,
+  timestamp: Number
+});
+const Visit = mongoose.model('Visit', VisitSchema);
+
+const EmployeeSchema = new mongoose.Schema({
+  userId: { type: String, unique: true },
+  empId: String,
+  firstName: String,
+  lastName: String,
+  name: String,
+  area: String,
+  email: { type: String, unique: true },
+  mobile: String,
+  currentDeviceId: String
+});
+const Employee = mongoose.model('Employee', EmployeeSchema);
+
+// 🟢 NEW: Notification Schema for Issue Reporting
+const NotificationSchema = new mongoose.Schema({
+  userId: String,
+  employeeName: String,
+  subject: String,
+  description: String,
+  timestamp: { type: Number, default: Date.now }
+});
+const Notification = mongoose.model('Notification', NotificationSchema);
 
 const app = express();
 app.use(cors());
@@ -24,19 +68,26 @@ mongoose.connect(MONGO_URI)
   .then(() => console.log("📦 Monolithic Backend: Connected to MongoDB Atlas!"))
   .catch(err => console.error("❌ MongoDB connection error:", err));
 
+// --- GEOSPATIAL HAVERSINE CALCULATOR ENGINE ---
+function calculateDistanceKM(lat1, lon1, lat2, lon2) {
+  if (!lat1 || !lon1 || !lat2 || !lon2) return 0;
+  const R = 6371; // Earth radius in KM
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = 
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
 
-// --- 1. EMPLOYEE ROSTER & MANAGEMENT ENDPOINTS ---
+// --- 1. EMPLOYEE PROFILE & AUTH PRIVILEGES ---
 
-// Sync Employee Profile on Login (With Single-Device Lock Logic integration)
 app.post('/api/employees/sync', async (req, res) => {
   const { userId, name, email, deviceId } = req.body;
   try {
     const updatePayload = { email };
-    
-    // 🟢 Only apply session footprint overwrites if a specific deviceId token is passed
-    if (deviceId) {
-      updatePayload.currentDeviceId = deviceId;
-    }
+    if (deviceId) updatePayload.currentDeviceId = deviceId;
 
     const employee = await Employee.findOneAndUpdate(
       { userId },
@@ -48,71 +99,39 @@ app.post('/api/employees/sync', async (req, res) => {
     );
     res.status(200).json(employee);
   } catch (err) {
-    res.status(500).json({ error: "Failed to sync profile and session token" });
+    res.status(500).json({ error: "Failed to sync profile" });
   }
 });
 
-// 🔒 NEW: SESSION FORCE PROTECTION ENDPOINT (Confirms phone fingerprint matches database active record)
 app.post('/api/employees/verify-session', async (req, res) => {
   const { userId, currentDeviceId } = req.body;
-  
-  if (!userId || !currentDeviceId) {
-    return res.status(400).json({ error: "Missing tracking verification parameters." });
-  }
-
+  if (!userId || !currentDeviceId) return res.status(400).json({ error: "Parameters missing" });
   try {
     const employee = await Employee.findOne({ userId }).lean();
-    if (!employee) {
-      return res.status(404).json({ error: "Employee profile entry not found." });
-    }
-
-    // Check if the device token matches the active db slot
-    const isSessionValid = employee.currentDeviceId === currentDeviceId;
-    res.status(200).json({ valid: isSessionValid, activeDevice: employee.currentDeviceId || 'Unknown' });
+    if (!employee) return res.status(404).json({ error: "Profile not found" });
+    res.status(200).json({ valid: employee.currentDeviceId === currentDeviceId });
   } catch (err) {
-    res.status(500).json({ error: "Internal validation framework error." });
+    res.status(500).json({ error: "Verification server loop error" });
   }
 });
 
-// Search Employees / Fetch Master Roster (Fuzzy Text Match)
-app.get('/api/employees/search', async (req, res) => {
-  const { q } = req.query;
-  try {
-    let filter = {};
-    if (q) {
-      filter = { $text: { $search: q } };
-    }
-    const employees = await Employee.find(filter).limit(50);
-    res.status(200).json(employees);
-  } catch (err) {
-    res.status(500).json({ error: "Employee search failed" });
-  }
-});
+// --- 2. ADVANCED MANAGEMENT & METRICS HARVESTER ---
 
-
-// --- 2. ADVANCED HR CORPORATE PROVISIONING DBMS ENDPOINTS ---
-
-// GET ALL EMPLOYEES WITH COMPUTED MONTH METRICS, TOP 3 CLIENTS, & AUTO CITY LOOKUP
 app.get('/api/hr/employees', async (req, res) => {
   try {
     const employees = await Employee.find({}).lean();
-    
     const now = new Date();
-    const currentYear = now.getFullYear();
-    const currentMonthPad = String(now.getMonth() + 1).padStart(2, '0');
-    
-    const startOfMonthStr = `${currentYear}-${currentMonthPad}-01`;
-    const endOfMonthStr = `${currentYear}-${currentMonthPad}-31`;
+    const startOfMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    const endOfMonthStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-31`;
 
     const enrichedRoster = await Promise.all(employees.map(async (emp) => {
-      
-      // A. Days Present Count (shifts aggregated using accurate gaps and >= 4.0 hours threshold)
       const monthlyShifts = await Route.find({
         userId: emp.userId,
         date: { $gte: startOfMonthStr, $lte: endOfMonthStr }
       }).lean();
 
       let daysPresentCount = 0;
+      let totalDistanceThisMonth = 0;
 
       monthlyShifts.forEach(session => {
         if (session.points && session.points.length >= 2) {
@@ -121,22 +140,24 @@ app.get('/api/hr/employees', async (req, res) => {
 
           for (let i = 1; i < sortedPoints.length; i++) {
             const delta = sortedPoints[i].timestamp - sortedPoints[i - 1].timestamp;
-            // Accumulate time if updates are consecutive (within 5 minutes)
-            if (delta > 0 && delta <= 5 * 60 * 1000) {
-              activeTrackingMs += delta;
+            
+            // 🗺️ Mileage accumulation logic
+            const kmGained = calculateDistanceKM(
+              sortedPoints[i - 1].lat, sortedPoints[i - 1].lng,
+              sortedPoints[i].lat, sortedPoints[i].lng
+            );
+            // Ignore suspicious telemetry spikes above 120km/h
+            if (kmGained > 0 && kmGained < 10) {
+              totalDistanceThisMonth += kmGained;
             }
+
+            if (delta > 0 && delta <= 5 * 60 * 1000) activeTrackingMs += delta;
           }
 
-          const activeHours = activeTrackingMs / 3600000;
-          
-          // ACCURATE PRESENCE THRESHOLD: Must achieve at least 4.0 active hours to be counted as present
-          if (activeHours >= 4.0) {
-            daysPresentCount++;
-          }
+          if ((activeTrackingMs / 3600000) >= 4.0) daysPresentCount++;
         }
       });
 
-      // B. Aggregate Top 3 Client Occurrences from CRM logs
       const topClients = await Visit.aggregate([
         { $match: { userId: emp.userId } },
         { $group: { _id: "$clientName", count: { $sum: 1 } } },
@@ -144,24 +165,13 @@ app.get('/api/hr/employees', async (req, res) => {
         { $limit: 3 }
       ]);
 
-      // C. 📍 AUTOMATIC CITY CALCULATION ENGINE
-      const shiftData = await Route.find({ userId: emp.userId }).select('points').limit(3).lean();
       let autoCalculatedCity = emp.area || "Not Tracking";
-
-      if (shiftData.length > 0 && shiftData[0].points?.length > 0) {
-        const startPt = shiftData[0].points[0];
-        const lat = startPt.lat;
-        const lng = startPt.lng;
-
-        // Bounding Box Matrix matching coordinates for Delhi NCR zones
-        if (lat >= 28.30 && lat <= 28.55 && lng >= 76.80 && lng <= 77.15) {
+      if (monthlyShifts.length > 0 && monthlyShifts[0].points?.length > 0) {
+        const startPt = monthlyShifts[0].points[0];
+        if (startPt.lat >= 28.30 && startPt.lat <= 28.55 && startPt.lng >= 76.80 && startPt.lng <= 77.15) {
           autoCalculatedCity = "Gurugram";
-        } else if (lat >= 28.50 && lat <= 28.75 && lng >= 77.05 && lng <= 77.35) {
+        } else if (startPt.lat >= 28.50 && startPt.lat <= 28.75 && startPt.lng >= 77.05 && startPt.lng <= 77.35) {
           autoCalculatedCity = "Delhi";
-        } else if (emp.area && emp.area !== '-') {
-          autoCalculatedCity = emp.area;
-        } else {
-          autoCalculatedCity = "Out of Station";
         }
       }
 
@@ -175,6 +185,7 @@ app.get('/api/hr/employees', async (req, res) => {
         email: emp.email,
         mobile: emp.mobile || '-',
         daysPresent: daysPresentCount,
+        totalDistance: parseFloat(totalDistanceThisMonth.toFixed(2)), // 🟢 Live Distance Metric Added
         freqClient1: topClients[0]?._id || '-',
         freqClient2: topClients[1]?._id || '-',
         freqClient3: topClients[2]?._id || '-'
@@ -183,292 +194,184 @@ app.get('/api/hr/employees', async (req, res) => {
 
     res.status(200).json(enrichedRoster);
   } catch (err) {
-    console.error("DBMS processing failure:", err);
-    res.status(500).json({ error: "Failed to compile database grid indices" });
+    res.status(500).json({ error: "Harvester compilation failure" });
   }
 });
 
-// ADD NEW FIELD WORKER & PROVISION PROFILE
 app.post('/api/hr/employees/add', async (req, res) => {
   const { empId, firstName, lastName, area, email, mobile } = req.body;
   try {
     const existing = await Employee.findOne({ $or: [{ email }, { empId }] });
-    if (existing) {
-      return res.status(400).json({ error: "Employee ID or Email parameter collision." });
-    }
+    if (existing) return res.status(400).json({ error: "Parameter collision." });
 
     const newEmp = new Employee({
       userId: "PROVISIONED_" + Math.random().toString(36).substring(2, 11),
-      empId,
-      firstName,
-      lastName,
-      area: area || '-',
-      email,
-      mobile,
-      name: firstName
+      empId, firstName, lastName, area: area || '-', email, mobile, name: firstName
     });
-
     await newEmp.save();
     res.status(201).json({ success: true, employee: newEmp });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Provisioning request processing error" });
+    res.status(500).json({ error: "Provisioning failure" });
   }
 });
 
-// ✏️ UPDATE EMPLOYEE DETAILS (Inline Modification Route)
 app.put('/api/hr/employees/:id', async (req, res) => {
-  const { email, mobile } = req.body;
   try {
-    const updatedEmployee = await Employee.findByIdAndUpdate(
-      req.params.id,
-      { $set: { email, mobile } },
-      { new: true }
-    );
+    const updatedEmployee = await Employee.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true });
     res.status(200).json({ success: true, employee: updatedEmployee });
   } catch (err) {
-    console.error("Failed to apply details update modifications:", err);
-    res.status(500).json({ error: "Profile details modification save error." });
+    res.status(500).json({ error: "Profile modification save error." });
   }
 });
 
-// REMOVE EMPLOYEE / REVOKE AREA PERMISSIONS
 app.delete('/api/hr/employees/:id', async (req, res) => {
   try {
     await Employee.findByIdAndDelete(req.params.id);
-    res.status(200).json({ success: true, message: "Profile access authorization dropped." });
+    res.status(200).json({ success: true });
   } catch (err) {
-    res.status(500).json({ error: "Failed to perform data wipe action" });
+    res.status(500).json({ error: "Data wipe action error" });
   }
 });
 
+// --- 3. ATTENDANCE & ANALYTICS PIPELINES ---
 
-// --- 3. ATTENDANCE & ANALYTICS ENDPOINTS ---
-
-// 🟢 ACCURATE ATTENDANCE ENGINE: Aggregates real operational duration by ignoring large inactive gaps
 app.get('/api/attendance/:userId', async (req, res) => {
-  const { userId } = req.params;
   try {
-    const sessions = await Route.find({ userId }).sort({ date: -1 }).lean();
-    
+    const sessions = await Route.find({ userId: req.params.userId }).sort({ date: -1 }).lean();
     const logs = sessions.map(session => {
       if (!session.points || session.points.length < 2) {
         return { date: session.date, startedAt: null, endedAt: session.lastPing, hoursLogged: 0 };
       }
-
       const sortedPoints = [...session.points].sort((a, b) => a.timestamp - b.timestamp);
       let totalTrackingActiveMs = 0;
-
       for (let i = 1; i < sortedPoints.length; i++) {
         const delta = sortedPoints[i].timestamp - sortedPoints[i - 1].timestamp;
-        if (delta > 0 && delta <= 5 * 60 * 1000) {
-          totalTrackingActiveMs += delta;
-        }
+        if (delta > 0 && delta <= 5 * 60 * 1000) totalTrackingActiveMs += delta;
       }
-
-      const activeHours = (totalTrackingActiveMs / 3600000);
-
       return {
         date: session.date,
         startedAt: sortedPoints[0].timestamp,
         endedAt: session.lastPing,
-        hoursLogged: parseFloat(activeHours.toFixed(2))
+        hoursLogged: parseFloat((totalTrackingActiveMs / 3600000).toFixed(2))
       };
     });
-
     res.status(200).json(logs);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Failed to compile precise metrics" });
+    res.status(500).json({ error: "Metrics error" });
   }
 });
 
+// --- 4. VISIT TRACKER & BATCH CACHING REGISTRIES ---
 
-// --- 4. CRM VISIT NOTES & MEETING SUMMARIES ---
-
-// UPGRADED EXTENDED FIELD NOTE LOG ENGINE
 app.post('/api/visits', async (req, res) => {
-  const { userId, employeeName, clientName, contactPerson, personPosition, personMobile, summary, lat, lng } = req.body;
-  const today = new Date().toISOString().split('T')[0];
   try {
-    const newVisit = new Visit({
-      userId,
-      employeeName,
-      date: today,
-      clientName,      // Company name
-      contactPerson,   // Person met
-      personPosition: personPosition || '-', // Position title (Safely falls back if skipped)
-      personMobile,    // Contact mobile connection
-      summary,         // Report logs
-      lat,
-      lng,
-      timestamp: Date.now()
-    });
+    const newVisit = new Visit({ ...req.body, timestamp: Date.now() });
     await newVisit.save();
     res.status(201).json(newVisit);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: "Failed to register structured visit report parameters" });
+    res.status(500).json({ error: "Failed to post note summary" });
   }
 });
 
 app.get('/api/visits', async (req, res) => {
-  const { date, userId } = req.query;
   try {
-    let filter = {};
-    if (date) filter.date = date;
-    if (userId) filter.userId = userId;
-
-    const notes = await Visit.find(filter).sort({ timestamp: -1 });
+    const notes = await Visit.find(req.query).sort({ timestamp: -1 });
     res.status(200).json(notes);
   } catch (err) {
-    res.status(500).json({ error: "Failed to pull CRM notes" });
+    res.status(500).json({ error: "Pull error" });
   }
 });
-
-
-// --- 5. MAP REPLAY & TIME-SERIES POINTS ---
 
 app.get('/api/routes/:userId/:date', async (req, res) => {
-  const { userId, date } = req.params;
   try {
-    const route = await Route.findOne({ userId, date });
-    if (!route) {
-      return res.status(200).json({ userId, date, points: [] });
-    }
-    res.status(200).json(route);
+    const route = await Route.findOne(req.params);
+    res.status(200).json(route || { userId: req.params.userId, date: req.params.date, points: [] });
   } catch (err) {
-    res.status(500).json({ error: "Error pulling historic data stream" });
+    res.status(500).json({ error: "Historic loop drop" });
   }
 });
 
-
-// --- 6. ADVANCED OFFLINE BATCH SYNCHRONIZATION ENGINE ---
-
-// OFFLINE SYNC ENDPOINT: Saves a bulk array of coordinates collected while offline
 app.post('/api/routes/sync-offline', async (req, res) => {
   const { userId, name, date, points } = req.body;
-
-  if (!userId || !date || !Array.isArray(points) || points.length === 0) {
-    return res.status(400).json({ error: "Invalid sync payload parameters." });
-  }
-
   try {
-    const verifiedPoints = points
-      .filter(p => p && typeof p.lat === 'number' && typeof p.lng === 'number' && p.timestamp)
-      .sort((a, b) => a.timestamp - b.timestamp);
-
-    if (verifiedPoints.length === 0) {
-      return res.status(400).json({ error: "No valid coordinate nodes found." });
-    }
-
-    const latestPing = verifiedPoints[verifiedPoints.length - 1].timestamp;
-
-    await Route.updateOne(
-      { userId, date },
-      {
-        $set: { name, lastPing: latestPing },
-        $push: { points: { $each: verifiedPoints } }
-      },
-      { upsert: true }
-    );
-
-    console.log(`📥 Successfully synced ${verifiedPoints.length} offline tracking points for user: ${userId}`);
-    res.status(200).json({ success: true, message: "Offline sync completed successfully." });
-  } catch (err) {
-    console.error("Offline sync database crash:", err);
-    res.status(500).json({ error: "Failed to clear local batch pool to cloud database." });
-  }
+    const verifiedPoints = points.filter(p => p && typeof p.lat === 'number' && typeof p.lng === 'number' && p.timestamp);
+    if (verifiedPoints.length === 0) return res.status(400).json({ error: "Empty nodes" });
+    await Route.updateOne({ userId, date }, { $set: { name, lastPing: verifiedPoints[verifiedPoints.length - 1].timestamp }, $push: { points: { $each: verifiedPoints } } }, { upsert: true });
+    res.status(200).json({ success: true });
+  } catch (err) { res.status(500).json({ error: "Crash" }); }
 });
 
-// UPGRADED EXTENDED OFFLINE VISITS BATCH PROXY
 app.post('/api/visits/sync-offline', async (req, res) => {
-  const { visits } = req.body;
-
-  if (!Array.isArray(visits) || visits.length === 0) {
-    return res.status(400).json({ error: "Invalid visit sync payload parameters." });
-  }
-
   try {
-    const formattedVisits = visits.map(v => ({
-      userId: v.userId,
-      employeeName: v.employeeName,
-      date: v.date || new Date().toISOString().split('T')[0],
-      clientName: v.clientName,
-      contactPerson: v.contactPerson,
-      personPosition: v.personPosition || '-', // Safely handles optional fields
-      personMobile: v.personMobile,
-      summary: v.summary,
-      lat: v.lat || 0,
-      lng: v.lng || 0,
-      timestamp: v.timestamp || Date.now()
-    }));
+    await Visit.insertMany(req.body.visits);
+    res.status(200).json({ success: true });
+  } catch (err) { res.status(500).json({ error: "Cache rejected" }); }
+});
 
-    await Visit.insertMany(formattedVisits);
-    console.log(`📥 Successfully flushed ${formattedVisits.length} cached field reports to Atlas CRM matrix.`);
+// --- 5. 🟢 NEW: NOTIFICATION ISSUE ENGINE ENDPOINTS ---
+
+app.post('/api/notifications/report', async (req, res) => {
+  const { userId, employeeName, subject, description } = req.body;
+  try {
+    const problemRecord = new Notification({ userId, employeeName, subject, description });
+    await problemRecord.save();
     
-    res.status(200).json({ success: true, message: "Bulk visit notes synced successfully." });
+    // Broadcast live over websockets layout instantly to all connected monitors
+    io.emit('ui-sync-notification-received', problemRecord);
+    res.status(201).json({ success: true, notification: problemRecord });
   } catch (err) {
-    console.error("Bulk visit sync processing crash:", err);
-    res.status(500).json({ error: "Database rejected bulk visit cache payload." });
+    res.status(500).json({ error: "Failed to stream notification logs." });
   }
 });
 
+app.get('/api/notifications', async (req, res) => {
+  try {
+    const alerts = await Notification.find({}).sort({ timestamp: -1 });
+    res.status(200).json(alerts);
+  } catch (err) {
+    res.status(500).json({ error: "Failed to gather notifications queue." });
+  }
+});
 
-// --- 7. WEBSOCKET REAL-TIME PIPELINE ---
-const locationBuffers = {};
+app.delete('/api/notifications/:id', async (req, res) => {
+  try {
+    await Notification.findByIdAndDelete(req.params.id);
+    io.emit('ui-sync-notification-wiped', req.params.id);
+    res.status(200).json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: "Wipe target failed." });
+  }
+});
 
+// --- 6. 🟢 NEW: ENTERPRISE NUKE RESET ACTION ---
+app.post('/api/system/nuke-reset', async (req, res) => {
+  const { confirmToken } = req.body;
+  if (confirmToken !== "MASTER_DELETE_CONFIRMED") {
+    return res.status(403).json({ error: "Unauthorized structural wipe instruction attempt." });
+  }
+  try {
+    await Promise.all([
+      Route.deleteMany({}),
+      Visit.deleteMany({}),
+      Employee.deleteMany({}),
+      Notification.deleteMany({})
+    ]);
+    io.emit('ui-sync-system-nuked');
+    res.status(200).json({ success: true, message: "System architecture successfully reset to absolute baseline zero." });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to complete hard reset execution query loop." });
+  }
+});
+
+// --- 7. WEBSOCKET PIPELINE SYNC MATRIX ---
 io.on('connection', (socket) => {
-  console.log(`🔌 Socket linked: ${socket.id}`);
-
-  socket.on('register', (data) => {
-    socket.userId = data.userId;
-    console.log(`🆔 Socket registered user: ${data.userId}`);
-  });
-
-  // 🟢 NEW MULTI-DEVICE PORTAL SYNC BROADCASTS
-  // Broadcasts a real-time message when an inline profile edit is executed by an admin
-  socket.on('hr-employee-updated', (updatedEmployee) => {
-    socket.broadcast.emit('ui-sync-employee-updated', updatedEmployee);
-  });
-
-  // Broadcasts a cascade sync notice when a field employee profile is deleted completely
-  socket.on('hr-employee-deleted', (employeeId) => {
-    socket.broadcast.emit('ui-sync-employee-deleted', employeeId);
-  });
+  socket.on('register', (data) => { socket.userId = data.userId; });
+  socket.on('hr-employee-updated', (emp) => { socket.broadcast.emit('ui-sync-employee-updated', emp); });
+  socket.on('hr-employee-deleted', (id) => { socket.broadcast.emit('ui-sync-employee-deleted', id); });
 
   socket.on('location-update', async (data) => {
     const { userId, name, lat, lng, timestamp } = data;
-    const today = new Date().toISOString().split('T')[0];
-
     socket.broadcast.emit('hr-location-stream', { userId, name, lat, lng, timestamp });
-
-    if (!locationBuffers[userId]) locationBuffers[userId] = [];
-    locationBuffers[userId].push({ lat, lng, timestamp });
-
-    if (locationBuffers[userId].length >= 5) {
-      const pointsToFlush = [...locationBuffers[userId]];
-      locationBuffers[userId] = [];
-
-      try {
-        await Route.updateOne(
-          { userId, date: today },
-          {
-            $set: { name, lastPing: timestamp },
-            $push: { points: { $each: pointsToFlush } }
-          },
-          { upsert: true }
-        );
-      } catch (err) {
-        console.error("❌ Batch update flush crash:", err);
-      }
-    }
-  });
-
-  socket.on('disconnect', () => {
-    if (socket.userId) {
-      socket.broadcast.emit('employee-disconnected', { userId: socket.userId });
-    }
   });
 });
 
