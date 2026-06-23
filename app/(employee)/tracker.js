@@ -1,13 +1,15 @@
 import { useRouter } from 'expo-router';
 import { onAuthStateChanged } from 'firebase/auth';
 import { arrayUnion, doc, setDoc } from 'firebase/firestore';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View, Dimensions, Platform, TextInput, ScrollView, ActivityIndicator } from 'react-native';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
 import { auth, db } from '../../src/services/firebaseConfig';
 import { BACKGROUND_LOCATION_TASK } from '../../src/services/locationTask'; 
 import socketInstance from '../../src/services/socket';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import NetInfo from '@react-native-community/netinfo';
 
 let MapView = null;
 let Polyline = null;
@@ -16,6 +18,9 @@ if (Platform.OS !== 'web') {
   MapView = Maps.default;
   Polyline = Maps.Polyline;
 }
+
+const OFFLINE_STORAGE_KEY = '@fieldo_offline_points';
+const OFFLINE_VISITS_KEY = '@fieldo_offline_visits';
 
 export default function TrackerScreen() {
   const router = useRouter();
@@ -43,7 +48,6 @@ export default function TrackerScreen() {
       setUser(currentUser);
       socketInstance.connect(currentUser.uid);
 
-      // Sync user metadata to the MongoDB master roster on every successful boot session
       try {
         await fetch("https://fieldo.onrender.com/api/employees/sync", {
           method: "POST",
@@ -60,6 +64,116 @@ export default function TrackerScreen() {
     });
     return () => unsubscribe();
   }, [router]);
+
+  // 📥 DUAL-QUEUE OFFLINE SYNC BATCH PROXIES
+  const handleNewLocationPoint = async (newPoint, latitude, longitude) => {
+    if (!user) return;
+    const state = await NetInfo.fetch();
+    const today = new Date().toISOString().split('T')[0];
+    const routeRef = doc(db, 'daily_routes', `${user.uid}_${today}`);
+
+    if (state.isConnected && state.isInternetReachable) {
+      // 🌐 ONLINE PROXY: Stream over WebSocket & Firestore instantly
+      socketInstance.emitLocation({
+        userId: user.uid,
+        name: user.email.split('@')[0],
+        lat: latitude,
+        lng: longitude,
+        timestamp: Date.now()
+      });
+
+      try {
+        await setDoc(routeRef, {
+          points: arrayUnion({ lat: latitude, lng: longitude, timestamp: Date.now() }),
+          lastPing: Date.now(),
+          isActive: true
+        }, { merge: true });
+      } catch (error) {
+        console.error('Firestore push failed:', error);
+      }
+    } else {
+      // 🚫 OFFLINE PROXY: Queue coordinate data locally to disk hardware
+      try {
+        const existingData = await AsyncStorage.getItem(OFFLINE_STORAGE_KEY);
+        const pointsList = existingData ? JSON.parse(existingData) : [];
+        
+        pointsList.push({
+          lat: latitude,
+          lng: longitude,
+          timestamp: Date.now()
+        });
+
+        await AsyncStorage.setItem(OFFLINE_STORAGE_KEY, JSON.stringify(pointsList));
+        console.log(`📍 Cached location point locally. Pending cluster: ${pointsList.length}`);
+      } catch (err) {
+        console.error("Failed to write coordinates to AsyncStorage:", err);
+      }
+    }
+  };
+
+  const syncCachedPayloadsToServer = useCallback(async () => {
+    if (!user) return;
+    const today = new Date().toISOString().split('T')[0];
+
+    // --- BATCH STREAM 1: COORDINATES SYNC ---
+    try {
+      const cachedData = await AsyncStorage.getItem(OFFLINE_STORAGE_KEY);
+      if (cachedData) {
+        const pointsToSync = JSON.parse(cachedData);
+        if (pointsToSync.length > 0) {
+          console.log("⚡ Network recovered! Flushing offline coordinate trails...");
+          const response = await fetch('https://fieldo.onrender.com/api/routes/sync-offline', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              userId: user.uid,
+              name: user.email.split('@')[0],
+              date: today,
+              points: pointsToSync
+            })
+          });
+          if (response.ok) {
+            await AsyncStorage.removeItem(OFFLINE_STORAGE_KEY);
+            console.log("✅ Coordinate cache emptied out successfully.");
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Failed to sync trailing locations:", err);
+    }
+
+    // --- BATCH STREAM 2: CRM VISIT NOTES SYNC ---
+    try {
+      const cachedVisits = await AsyncStorage.getItem(OFFLINE_VISITS_KEY);
+      if (cachedVisits) {
+        const visitsToSync = JSON.parse(cachedVisits);
+        if (visitsToSync.length > 0) {
+          console.log("⚡ Network recovered! Flushing pending offline CRM visit notes...");
+          const response = await fetch('https://fieldo.onrender.com/api/visits/sync-offline', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ visits: visitsToSync })
+          });
+          if (response.ok) {
+            await AsyncStorage.removeItem(OFFLINE_VISITS_KEY);
+            console.log("✅ Offline visit logs database synchronized cleanly.");
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Failed to batch upload queued visit summaries:", err);
+    }
+  }, [user]);
+
+  // NetInfo network subscriber setup
+  useEffect(() => {
+    const unsubscribe = NetInfo.addEventListener(state => {
+      if (state.isConnected && state.isInternetReachable) {
+        syncCachedPayloadsToServer();
+      }
+    });
+    return () => unsubscribe();
+  }, [syncCachedPayloadsToServer]);
 
   // Smart Boot Sync
   useEffect(() => {
@@ -85,23 +199,7 @@ export default function TrackerScreen() {
             }));
             setRoutePoints(prev => [...prev, newPoint]);
 
-            socketInstance.emitLocation({
-              userId: user.uid,
-              name: user.email.split('@')[0],
-              lat: location.coords.latitude,
-              lng: location.coords.longitude,
-              timestamp: Date.now()
-            });
-
-            try {
-              await setDoc(routeRef, {
-                points: arrayUnion({ lat: newPoint.latitude, lng: newPoint.longitude, timestamp: Date.now() }),
-                lastPing: Date.now(),
-                isActive: true
-              }, { merge: true });
-            } catch (error) {
-              console.error('Firestore push failed:', error);
-            }
+            await handleNewLocationPoint(newPoint, location.coords.latitude, location.coords.longitude);
           }
         );
         setLocationSub(sub);
@@ -129,7 +227,7 @@ export default function TrackerScreen() {
       }
     })();
     return () => { if (locationSub) locationSub.remove(); };
-  }, []);
+  }, [locationSub]);
 
   const toggleTracking = async () => {
     const today = new Date().toISOString().split('T')[0];
@@ -182,28 +280,13 @@ export default function TrackerScreen() {
         setCurrentCoords(prev => ({ ...newPoint, latitudeDelta: 0.01, longitudeDelta: 0.01 }));
         setRoutePoints(prev => [...prev, newPoint]);
 
-        socketInstance.emitLocation({
-          userId: user.uid,
-          name: user.email.split('@')[0],
-          lat: location.coords.latitude,
-          lng: location.coords.longitude,
-          timestamp: Date.now()
-        });
-
-        try {
-          await setDoc(routeRef, {
-            points: arrayUnion({ lat: location.coords.latitude, lng: location.coords.longitude, timestamp: Date.now() }),
-            lastPing: Date.now() 
-          }, { merge: true });
-        } catch (error) {
-          console.error('Firestore push failed:', error);
-        }
+        await handleNewLocationPoint(newPoint, location.coords.latitude, location.coords.longitude);
       }
     );
     setLocationSub(sub);
   };
 
-  // 🚀 CRM Note Submission
+  // 🚀 Upgraded CRM Note Submission with Offline Interceptor
   const handleSubmitVisitNote = async () => {
     if (!clientName.trim() || !summary.trim()) {
       Alert.alert("Missing Fields", "Please populate both fields before submitting log entries.");
@@ -212,32 +295,62 @@ export default function TrackerScreen() {
     setIsSubmittingNote(true);
 
     try {
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      
+      let lat = 0;
+      let lng = 0;
+      try {
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        lat = loc.coords.latitude;
+        lng = loc.coords.longitude;
+      } catch (e) {
+        if (currentCoords) {
+          lat = currentCoords.latitude;
+          lng = currentCoords.longitude;
+        }
+      }
+
+      const today = new Date().toISOString().split('T')[0];
       const payload = {
         userId: user.uid,
         employeeName: user.email.split('@')[0],
         clientName: clientName,
         summary: summary,
-        lat: loc.coords.latitude,
-        lng: loc.coords.longitude
+        lat: lat,
+        lng: lng,
+        date: today,
+        timestamp: Date.now()
       };
 
-      const response = await fetch("https://fieldo.onrender.com/api/visits", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
+      const state = await NetInfo.fetch();
 
-      if (response.ok) {
-        Alert.alert("Success", "Visit logged successfully into the cloud framework!");
+      if (state.isConnected && state.isInternetReachable) {
+        // 🌐 ONLINE ENTRANCE: Ship directly to cloud metrics endpoint
+        const response = await fetch("https://fieldo.onrender.com/api/visits", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+
+        if (response.ok) {
+          Alert.alert("Success", "Visit logged successfully into the cloud framework!");
+          setClientName('');
+          setSummary('');
+        } else {
+          throw new Error();
+        }
+      } else {
+        // 🚫 OFFLINE ENTRANCE: Intercept and append details safely to local cache array
+        const existingData = await AsyncStorage.getItem(OFFLINE_VISITS_KEY);
+        const visitList = existingData ? JSON.parse(existingData) : [];
+        
+        visitList.push(payload);
+        await AsyncStorage.setItem(OFFLINE_VISITS_KEY, JSON.stringify(visitList));
+        
+        Alert.alert("Cached Offline", "No active connection detected. Field report stored securely on device and will auto-sync once signal returns.");
         setClientName('');
         setSummary('');
-      } else {
-        throw new Error();
       }
     } catch (err) {
-      Alert.alert("Submission Failure", "Network payload rejected by endpoint.");
+      Alert.alert("Submission Failure", "Failed to process field report package parameters.");
     } finally {
       setIsSubmittingNote(false);
     }
