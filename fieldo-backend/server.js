@@ -100,7 +100,7 @@ app.get('/api/hr/employees', async (req, res) => {
 
           const activeHours = activeTrackingMs / 3600000;
           
-          // 🟢 ACCURATE PRESENCE THRESHOLD: Must achieve at least 4.0 active hours to be counted as present
+          // ACCURATE PRESENCE THRESHOLD: Must achieve at least 4.0 active hours to be counted as present
           if (activeHours >= 4.0) {
             daysPresentCount++;
           }
@@ -257,16 +257,20 @@ app.get('/api/attendance/:userId', async (req, res) => {
 
 // --- 4. CRM VISIT NOTES & MEETING SUMMARIES ---
 
+// 🟢 UPGRADED EXTENDED FIELD NOTE LOG ENGINE
 app.post('/api/visits', async (req, res) => {
-  const { userId, employeeName, clientName, summary, lat, lng } = req.body;
+  const { userId, employeeName, clientName, contactPerson, personPosition, personMobile, summary, lat, lng } = req.body;
   const today = new Date().toISOString().split('T')[0];
   try {
     const newVisit = new Visit({
       userId,
       employeeName,
       date: today,
-      clientName,
-      summary,
+      clientName,      // Company name
+      contactPerson,   // Person met
+      personPosition: personPosition || '-', // Position title (Safely falls back if skipped)
+      personMobile,    // Contact mobile connection
+      summary,         // Report logs
       lat,
       lng,
       timestamp: Date.now()
@@ -274,7 +278,8 @@ app.post('/api/visits', async (req, res) => {
     await newVisit.save();
     res.status(201).json(newVisit);
   } catch (err) {
-    res.status(500).json({ error: "Failed to register visit note summary" });
+    console.error(err);
+    res.status(500).json({ error: "Failed to register structured visit report parameters" });
   }
 });
 
@@ -311,7 +316,7 @@ app.get('/api/routes/:userId/:date', async (req, res) => {
 
 // --- 6. ADVANCED OFFLINE BATCH SYNCHRONIZATION ENGINE ---
 
-// 🟢 OFFLINE SYNC ENDPOINT: Saves a bulk array of coordinates collected while offline
+// OFFLINE SYNC ENDPOINT: Saves a bulk array of coordinates collected while offline
 app.post('/api/routes/sync-offline', async (req, res) => {
   const { userId, name, date, points } = req.body;
 
@@ -347,7 +352,7 @@ app.post('/api/routes/sync-offline', async (req, res) => {
   }
 });
 
-// 🟢 OFFLINE VISITS SYNC ENDPOINT: Processes a bulk batch of CRM reports logged while offline
+// 🟢 UPGRADED EXTENDED OFFLINE VISITS BATCH PROXY
 app.post('/api/visits/sync-offline', async (req, res) => {
   const { visits } = req.body;
 
@@ -361,6 +366,9 @@ app.post('/api/visits/sync-offline', async (req, res) => {
       employeeName: v.employeeName,
       date: v.date || new Date().toISOString().split('T')[0],
       clientName: v.clientName,
+      contactPerson: v.contactPerson,
+      personPosition: v.personPosition || '-', // Safely handles optional fields
+      personMobile: v.personMobile,
       summary: v.summary,
       lat: v.lat || 0,
       lng: v.lng || 0,

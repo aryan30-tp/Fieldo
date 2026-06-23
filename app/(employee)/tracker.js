@@ -31,11 +31,13 @@ export default function TrackerScreen() {
   
   const [currentCoords, setCurrentCoords] = useState(null);
   const [routePoints, setRoutePoints] = useState([]);
-  const [lastError, setLastError] = useState('');
 
-  // 📝 CRM Visit Form States
-  const [clientName, setClientName] = useState('');
-  const [summary, setSummary] = useState('');
+  // 📝 EXTENDED CRM VISIT FORM STATES
+  const [clientName, setClientName] = useState(''); // Company Name
+  const [contactPerson, setContactPerson] = useState(''); // Person Met
+  const [personPosition, setPersonPosition] = useState(''); // Position (Optional)
+  const [personMobile, setPersonMobile] = useState(''); // Contact Mobile
+  const [summary, setSummary] = useState(''); // Discussion Summary
   const [isSubmittingNote, setIsSubmittingNote] = useState(false);
 
   // 1. Auth Listener & Profile Sync
@@ -65,7 +67,7 @@ export default function TrackerScreen() {
     return () => unsubscribe();
   }, [router]);
 
-  // 📥 DUAL-QUEUE OFFLINE SYNC BATCH PROXIES
+  // handleNewLocationPoint, syncCachedPayloadsToServer remain the same as previous offline updates
   const handleNewLocationPoint = async (newPoint, latitude, longitude) => {
     if (!user) return;
     const state = await NetInfo.fetch();
@@ -73,7 +75,6 @@ export default function TrackerScreen() {
     const routeRef = doc(db, 'daily_routes', `${user.uid}_${today}`);
 
     if (state.isConnected && state.isInternetReachable) {
-      // 🌐 ONLINE PROXY: Stream over WebSocket & Firestore instantly
       socketInstance.emitLocation({
         userId: user.uid,
         name: user.email.split('@')[0],
@@ -92,21 +93,13 @@ export default function TrackerScreen() {
         console.error('Firestore push failed:', error);
       }
     } else {
-      // 🚫 OFFLINE PROXY: Queue coordinate data locally to disk hardware
       try {
         const existingData = await AsyncStorage.getItem(OFFLINE_STORAGE_KEY);
         const pointsList = existingData ? JSON.parse(existingData) : [];
-        
-        pointsList.push({
-          lat: latitude,
-          lng: longitude,
-          timestamp: Date.now()
-        });
-
+        pointsList.push({ lat: latitude, lng: longitude, timestamp: Date.now() });
         await AsyncStorage.setItem(OFFLINE_STORAGE_KEY, JSON.stringify(pointsList));
-        console.log(`📍 Cached location point locally. Pending cluster: ${pointsList.length}`);
       } catch (err) {
-        console.error("Failed to write coordinates to AsyncStorage:", err);
+        console.error(err);
       }
     }
   };
@@ -115,67 +108,45 @@ export default function TrackerScreen() {
     if (!user) return;
     const today = new Date().toISOString().split('T')[0];
 
-    // --- BATCH STREAM 1: COORDINATES SYNC ---
     try {
       const cachedData = await AsyncStorage.getItem(OFFLINE_STORAGE_KEY);
       if (cachedData) {
         const pointsToSync = JSON.parse(cachedData);
         if (pointsToSync.length > 0) {
-          console.log("⚡ Network recovered! Flushing offline coordinate trails...");
           const response = await fetch('https://fieldo.onrender.com/api/routes/sync-offline', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              userId: user.uid,
-              name: user.email.split('@')[0],
-              date: today,
-              points: pointsToSync
-            })
+            body: JSON.stringify({ userId: user.uid, name: user.email.split('@')[0], date: today, points: pointsToSync })
           });
-          if (response.ok) {
-            await AsyncStorage.removeItem(OFFLINE_STORAGE_KEY);
-            console.log("✅ Coordinate cache emptied out successfully.");
-          }
+          if (response.ok) await AsyncStorage.removeItem(OFFLINE_STORAGE_KEY);
         }
       }
-    } catch (err) {
-      console.error("Failed to sync trailing locations:", err);
-    }
+    } catch (err) { console.error(err); }
 
-    // --- BATCH STREAM 2: CRM VISIT NOTES SYNC ---
     try {
       const cachedVisits = await AsyncStorage.getItem(OFFLINE_VISITS_KEY);
       if (cachedVisits) {
         const visitsToSync = JSON.parse(cachedVisits);
         if (visitsToSync.length > 0) {
-          console.log("⚡ Network recovered! Flushing pending offline CRM visit notes...");
           const response = await fetch('https://fieldo.onrender.com/api/visits/sync-offline', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ visits: visitsToSync })
           });
-          if (response.ok) {
-            await AsyncStorage.removeItem(OFFLINE_VISITS_KEY);
-            console.log("✅ Offline visit logs database synchronized cleanly.");
-          }
+          if (response.ok) await AsyncStorage.removeItem(OFFLINE_VISITS_KEY);
         }
       }
-    } catch (err) {
-      console.error("Failed to batch upload queued visit summaries:", err);
-    }
+    } catch (err) { console.error(err); }
   }, [user]);
 
-  // NetInfo network subscriber setup
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {
-      if (state.isConnected && state.isInternetReachable) {
-        syncCachedPayloadsToServer();
-      }
+      if (state.isConnected && state.isInternetReachable) syncCachedPayloadsToServer();
     });
     return () => unsubscribe();
   }, [syncCachedPayloadsToServer]);
 
-  // Smart Boot Sync
+  // Smart Boot Sync & Permission hooks
   useEffect(() => {
     const syncTrackingState = async () => {
       if (!user) return;
@@ -192,19 +163,12 @@ export default function TrackerScreen() {
           { accuracy: Location.Accuracy.Highest, timeInterval: 3000, distanceInterval: 0 },
           async (location) => {
             const newPoint = { latitude: location.coords.latitude, longitude: location.coords.longitude };
-            setCurrentCoords(prev => ({ 
-              ...newPoint, 
-              latitudeDelta: prev?.latitudeDelta || 0.01, 
-              longitudeDelta: prev?.longitudeDelta || 0.01 
-            }));
+            setCurrentCoords(prev => ({ ...newPoint, latitudeDelta: 0.01, longitudeDelta: 0.01 }));
             setRoutePoints(prev => [...prev, newPoint]);
-
             await handleNewLocationPoint(newPoint, location.coords.latitude, location.coords.longitude);
           }
         );
         setLocationSub(sub);
-      } else {
-        setDoc(routeRef, { isActive: false }, { merge: true }).catch(() => {});
       }
     };
     syncTrackingState();
@@ -214,20 +178,10 @@ export default function TrackerScreen() {
     (async () => {
       let { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') return;
-      try {
-        let location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        setCurrentCoords({
-          latitude: location.coords.latitude,
-          longitude: location.coords.longitude,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01,
-        });
-      } catch (error) {
-        console.warn("Could not get initial location map center");
-      }
+      let location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      setCurrentCoords({ latitude: location.coords.latitude, longitude: location.coords.longitude, latitudeDelta: 0.01, longitudeDelta: 0.01 });
     })();
-    return () => { if (locationSub) locationSub.remove(); };
-  }, [locationSub]);
+  }, []);
 
   const toggleTracking = async () => {
     const today = new Date().toISOString().split('T')[0];
@@ -237,39 +191,25 @@ export default function TrackerScreen() {
     if (isTracking) {
       if (locationSub) locationSub.remove();
       setLocationSub(null);
-      const hasTask = await TaskManager.isTaskRegisteredAsync(BACKGROUND_LOCATION_TASK);
-      if (hasTask) await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
+      if (await TaskManager.isTaskRegisteredAsync(BACKGROUND_LOCATION_TASK)) await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
       setIsTracking(false);
       setStatus('Tracking stopped');
       await setDoc(routeRef, { isActive: false }, { merge: true });
       return;
     }
 
-    if (!user) return;
-
     const fgPerm = await Location.requestForegroundPermissionsAsync();
-    if (fgPerm.status !== 'granted') {
-      Alert.alert('Permission denied', 'App needs location access to track routes.');
-      return;
-    }
+    if (fgPerm.status !== 'granted') return;
     const bgPerm = await Location.requestBackgroundPermissionsAsync();
 
     setIsTracking(true);
     setStatus('Tracking live & in background...');
-
     setDoc(routeRef, { userId: user.uid, name: user.email.split('@')[0], date: today, isActive: true }, { merge: true });
 
     if (bgPerm.status === 'granted') {
       await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, {
-        accuracy: Location.Accuracy.Highest,
-        timeInterval: 10000, 
-        distanceInterval: 5, 
-        showsBackgroundLocationIndicator: true, 
-        foregroundService: {
-          notificationTitle: "Fieldo is active",
-          notificationBody: "Tracking your shift route.",
-          notificationColor: "#22C55E",
-        },
+        accuracy: Location.Accuracy.Highest, timeInterval: 10000, distanceInterval: 5, showsBackgroundLocationIndicator: true,
+        foregroundService: { notificationTitle: "Fieldo is active", notificationBody: "Tracking your shift route.", notificationColor: "#22C55E" }
       });
     }
 
@@ -279,43 +219,39 @@ export default function TrackerScreen() {
         const newPoint = { latitude: location.coords.latitude, longitude: location.coords.longitude };
         setCurrentCoords(prev => ({ ...newPoint, latitudeDelta: 0.01, longitudeDelta: 0.01 }));
         setRoutePoints(prev => [...prev, newPoint]);
-
         await handleNewLocationPoint(newPoint, location.coords.latitude, location.coords.longitude);
       }
     );
     setLocationSub(sub);
   };
 
-  // 🚀 Upgraded CRM Note Submission with Offline Interceptor
+  // 🚀 HIGHLY STRUCTURED CRM FIELD REPORT SUBMISSION
   const handleSubmitVisitNote = async () => {
-    if (!clientName.trim() || !summary.trim()) {
-      Alert.alert("Missing Fields", "Please populate both fields before submitting log entries.");
+    // Structural validations: Person position left explicitly optional
+    if (!clientName.trim() || !contactPerson.trim() || !personMobile.trim() || !summary.trim()) {
+      Alert.alert("Missing Fields", "Please populate Company, Person Met, Mobile Number, and Summary details.");
       return;
     }
     setIsSubmittingNote(true);
 
     try {
-      let lat = 0;
-      let lng = 0;
+      let lat = 0; let lng = 0;
       try {
         const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        lat = loc.coords.latitude;
-        lng = loc.coords.longitude;
+        lat = loc.coords.latitude; lng = loc.coords.longitude;
       } catch (e) {
-        if (currentCoords) {
-          lat = currentCoords.latitude;
-          lng = currentCoords.longitude;
-        }
+        if (currentCoords) { lat = currentCoords.latitude; lng = currentCoords.longitude; }
       }
 
       const today = new Date().toISOString().split('T')[0];
       const payload = {
         userId: user.uid,
         employeeName: user.email.split('@')[0],
-        clientName: clientName,
-        summary: summary,
-        lat: lat,
-        lng: lng,
+        clientName: clientName, // Company where he went
+        contactPerson: contactPerson, // Name of the person he met
+        personPosition: personPosition.trim() || '-', // Optional title description parameter
+        personMobile: personMobile, // Contact person mobile connection
+        summary: summary, // Discussion notes report
         date: today,
         timestamp: Date.now()
       };
@@ -323,7 +259,6 @@ export default function TrackerScreen() {
       const state = await NetInfo.fetch();
 
       if (state.isConnected && state.isInternetReachable) {
-        // 🌐 ONLINE ENTRANCE: Ship directly to cloud metrics endpoint
         const response = await fetch("https://fieldo.onrender.com/api/visits", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -331,26 +266,22 @@ export default function TrackerScreen() {
         });
 
         if (response.ok) {
-          Alert.alert("Success", "Visit logged successfully into the cloud framework!");
-          setClientName('');
-          setSummary('');
+          Alert.alert("Success", "Detailed field report logged cleanly!");
+          setClientName(''); setContactPerson(''); setPersonPosition(''); setPersonMobile(''); setSummary('');
         } else {
           throw new Error();
         }
       } else {
-        // 🚫 OFFLINE ENTRANCE: Intercept and append details safely to local cache array
         const existingData = await AsyncStorage.getItem(OFFLINE_VISITS_KEY);
         const visitList = existingData ? JSON.parse(existingData) : [];
-        
         visitList.push(payload);
         await AsyncStorage.setItem(OFFLINE_VISITS_KEY, JSON.stringify(visitList));
         
-        Alert.alert("Cached Offline", "No active connection detected. Field report stored securely on device and will auto-sync once signal returns.");
-        setClientName('');
-        setSummary('');
+        Alert.alert("Cached Offline", "No active connection. Field report saved locally on phone and will sync once internet coverage returns.");
+        setClientName(''); setContactPerson(''); setPersonPosition(''); setPersonMobile(''); setSummary('');
       }
     } catch (err) {
-      Alert.alert("Submission Failure", "Failed to process field report package parameters.");
+      Alert.alert("Submission Failure", "Failed to process the field report layout parameters.");
     } finally {
       setIsSubmittingNote(false);
     }
@@ -387,25 +318,15 @@ export default function TrackerScreen() {
             <Text style={styles.buttonText}>{isTracking ? 'Stop Tracking' : 'Start Tracking'}</Text>
           </Pressable>
 
-          {/* CRM VISIT SUBMISSION FORM */}
+          {/* 🟢 UPGRADED EXTENDED HIGHLY-STRUCTURED SUBMISSION FORM FIELDS */}
           <View style={styles.formContainer}>
-            <Text style={styles.formTitle}>📝 Log Client Visit</Text>
-            <TextInput 
-              style={styles.input} 
-              placeholder="Client/Company Name" 
-              placeholderTextColor="#64748B"
-              value={clientName}
-              onChangeText={setClientName}
-            />
-            <TextInput 
-              style={[styles.input, styles.textArea]} 
-              placeholder="What was discussed? Summary report..." 
-              placeholderTextColor="#64748B"
-              multiline
-              numberOfLines={3}
-              value={summary}
-              onChangeText={setSummary}
-            />
+            <Text style={styles.formTitle}>📝 Detailed Field Report</Text>
+            <TextInput style={styles.input} placeholder="Company Visited" placeholderTextColor="#64748B" value={clientName} onChangeText={setClientName} />
+            <TextInput style={styles.input} placeholder="Person Met Name" placeholderTextColor="#64748B" value={contactPerson} onChangeText={setContactPerson} />
+            <TextInput style={styles.input} placeholder="Position/Title (Optional)" placeholderTextColor="#64748B" value={personPosition} onChangeText={setPersonPosition} />
+            <TextInput style={styles.input} placeholder="Person Mobile Number" placeholderTextColor="#64748B" keyboardType="phone-pad" value={personMobile} onChangeText={setPersonMobile} />
+            <TextInput style={[styles.input, styles.textArea]} placeholder="What was discussed? Summary report..." placeholderTextColor="#64748B" multiline numberOfLines={3} value={summary} onChangeText={setSummary} />
+            
             <Pressable style={styles.formButton} onPress={handleSubmitVisitNote} disabled={isSubmittingNote}>
               {isSubmittingNote ? <ActivityIndicator color="#06101D" /> : <Text style={styles.formButtonText}>Submit Visit Note</Text>}
             </Pressable>
