@@ -19,7 +19,7 @@ export default function HRMonolithicControlHub() {
   const [liveEmployees, setLiveEmployees] = useState({});
   const [roster, setRoster] = useState([]);
   
-  // 🧭 UI WORKSPACE VIEW STATE
+  // UI WORKSPACE VIEW STATE
   const [currentTab, setCurrentTab] = useState('dbms');
   const [selectedUser, setSelectedUser] = useState({ id: null, name: '' });
 
@@ -45,7 +45,7 @@ export default function HRMonolithicControlHub() {
   const [editingRowId, setEditingRowId] = useState(null);
   const [editFields, setEditFields] = useState({ email: '', mobile: '' });
 
-  // ⚙️ GLOBAL CONTROL STATE REGISTRIES
+  // GLOBAL CONTROL STATE REGISTRIES
   const [isSettingsOpen, setIsSettingsOpen] = useState(false); 
   const [notifications, setNotifications] = useState([]);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
@@ -307,6 +307,7 @@ export default function HRMonolithicControlHub() {
     });
   }, [roster, dbmsSearch, areaFilter]);
 
+  // CALENDAR GRID WITH 5-MINUTE THRESHOLD AND GENUINE ABSENCE LOGIC
   const renderCalendarGrid = useMemo(() => {
     if (!selectedUser.id) return null;
     const firstDayIndex = new Date(calendarYear, calendarMonth, 1).getDay();
@@ -314,10 +315,9 @@ export default function HRMonolithicControlHub() {
     const attendanceMap = {};
     attendanceLogs.forEach(log => { attendanceMap[log.date] = log.hoursLogged; });
 
-    // 🟢 THRESHOLD: 5 minutes in hours (5 / 60 = ~0.0833 hrs)
+    // 5 minutes in hours (5 / 60 = ~0.0833 hrs)
     const REQUIRED_HOURS_LIMIT = 5 / 60;
     
-    // Normalize today's date for clean comparison (ignore time)
     const now = new Date();
     const todayNormalized = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
@@ -327,9 +327,8 @@ export default function HRMonolithicControlHub() {
     for (let day = 1; day <= totalDaysInMonth; day++) {
       const dayString = `${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
       const cellDate = new Date(calendarYear, calendarMonth, day);
-      const dayOfWeek = cellDate.getDay(); // 0 = Sunday, 6 = Saturday
+      const dayOfWeek = cellDate.getDay();
       
-      // Calculate 2nd Saturday rule
       let isSecondSaturday = false;
       if (dayOfWeek === 6) {
         let satCount = 0;
@@ -339,20 +338,16 @@ export default function HRMonolithicControlHub() {
         if (satCount === 2) isSecondSaturday = true;
       }
 
-      const isWeekend = dayOfWeek === 0 || isSecondSaturday; // Sunday or 2nd Saturday
+      const isWeekend = dayOfWeek === 0 || isSecondSaturday;
       const isPastOrToday = cellDate <= todayNormalized;
       const hoursLogged = attendanceMap[dayString] || 0;
       const hasRecord = attendanceMap[dayString] !== undefined;
 
-      // 🟢 DOT STATUS DETERMINATION:
-      // - Weekends: Never show any absent indicator
-      // - Present: Recorded >= 5 mins (even if on weekend, shows green if worked)
-      // - Absent: Past working days with < 5 mins OR genuinely no record at all
       let dotType = null;
       if (hoursLogged >= REQUIRED_HOURS_LIMIT) {
-        dotType = 'present'; // 🟢 Green
+        dotType = 'present';
       } else if (!isWeekend && isPastOrToday) {
-        dotType = 'absent';  // 🔴 Red for genuine absence or incomplete shift
+        dotType = 'absent';
       }
 
       gridCells.push(
@@ -617,7 +612,7 @@ export default function HRMonolithicControlHub() {
         </View>
       </Modal>
 
-      {/* 🟢 OVERHAULED CLEAN HR OPTIONS SETTINGS DRAWER MENU MODULE */}
+      {/* MASTER SETTINGS DRAWER MENU */}
       <Modal visible={isSettingsOpen} animationType="slide" transparent>
         <View style={styles.sidebarModalBackdropRightLayout}>
           <Pressable style={{ flex: 1 }} onPress={() => setIsSettingsOpen(false)} />
@@ -630,14 +625,12 @@ export default function HRMonolithicControlHub() {
             </View>
 
             <View style={{ gap: 14, marginTop: 10 }}>
-              {/* Dev Contact Interactive Trigger Block */}
               <TouchableOpacity style={styles.webSettingsInfoCard} onPress={handleTriggerDevEmailClient}>
                 <Text style={styles.webSettingsCardHeading}>Contact Dev</Text>
                 <Text style={{ color: '#94A3B8', fontSize: 13, marginTop: 2 }}>Build Version v2.4.0</Text>
                 <Text style={{ color: '#38BDF8', fontSize: 13, fontWeight: '600', marginTop: 4, textDecorationLine: 'underline' }}>aryan30n@gmail.com</Text>
               </TouchableOpacity>
 
-              {/* Simplified Clean Options buttons as requested */}
               <TouchableOpacity style={styles.webSettingsNukeActionBtn} onPress={() => setIsNukeModalOpen(true)}>
                 <Text style={{ color: '#EF4444', fontWeight: '800', fontSize: 14 }}>Reset</Text>
               </TouchableOpacity>
