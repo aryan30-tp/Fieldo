@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, Modal, Button, Platform } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, Modal, Button, Platform, Pressable } from 'react-native';
 import { useRouter } from 'expo-router';
 import { signOut } from 'firebase/auth';
 import { collection, onSnapshot } from 'firebase/firestore';
@@ -11,7 +11,6 @@ if (Platform.OS === 'web') {
   WebMap = require('../../src/components/WebMap').default;
 }
 
-// Establish global socket pipeline link targeting your live server engine
 const socket = io("https://fieldo.onrender.com");
 
 export default function HRMonolithicControlHub() {
@@ -46,7 +45,8 @@ export default function HRMonolithicControlHub() {
   const [editingRowId, setEditingRowId] = useState(null);
   const [editFields, setEditFields] = useState({ email: '', mobile: '' });
 
-  // 🟢 NEW: ENTERPRISE OVERLAY STATES (Notifications & Destructive Actions)
+  // ⚙️ GLOBAL CONTROL STATE REGISTRIES
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false); 
   const [notifications, setNotifications] = useState([]);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [expandedNotifId, setExpandedNotifId] = useState(null);
@@ -66,7 +66,6 @@ export default function HRMonolithicControlHub() {
     }
   }, []);
 
-  // 🟢 NEW: Gather all open field issues logged by mobile operators
   const fetchNotifications = useCallback(async () => {
     try {
       const res = await fetch('https://fieldo.onrender.com/api/notifications');
@@ -94,7 +93,6 @@ export default function HRMonolithicControlHub() {
     }
   }, []);
 
-  // Multi-Device Real-Time Synchronization Listener Hooks Effect
   useEffect(() => {
     setIsClient(true);
     fetchMasterData();
@@ -117,7 +115,6 @@ export default function HRMonolithicControlHub() {
       });
     });
 
-    // 🟢 NEW: Catch real-time workspace alert broadcasts across endpoints
     socket.on('ui-sync-notification-received', (newNotif) => {
       setNotifications(prev => [newNotif, ...prev]);
     });
@@ -128,7 +125,6 @@ export default function HRMonolithicControlHub() {
     });
 
     socket.on('ui-sync-system-nuked', () => {
-      alert("🚨 A master wipe command has been executed on another admin terminal. Flushing interface baseline...");
       setRoster([]);
       setNotifications([]);
       setLiveEmployees({});
@@ -245,7 +241,6 @@ export default function HRMonolithicControlHub() {
     }
   };
 
-  // 🟢 NEW: Clear alert profiles out of the system once fixed
   const handleResolveNotification = async (id) => {
     try {
       const response = await fetch(`https://fieldo.onrender.com/api/notifications/${id}`, { method: 'DELETE' });
@@ -258,7 +253,6 @@ export default function HRMonolithicControlHub() {
     }
   };
 
-  // 🟢 NEW: DESTRUCTIVE SYSTEM RESET PIPELINE EXECUTION
   const handleExecuteMasterSystemNuke = async () => {
     if (nukeConfirmText !== "delete") {
       alert("Verification mismatched. Action rejected.");
@@ -272,21 +266,32 @@ export default function HRMonolithicControlHub() {
         body: JSON.stringify({ confirmToken: "MASTER_DELETE_CONFIRMED" })
       });
       if (res.ok) {
-        alert("Database structure successfully reset to baseline zero configuration.");
+        alert("Database successfully wiped.");
         setRoster([]);
         setNotifications([]);
         setIsNukeModalOpen(false);
+        setIsSettingsOpen(false);
         setNukeConfirmText('');
         setCurrentTab('dbms');
         setSelectedUser({ id: null, name: '' });
-      } else {
-        alert("Master server rejected token authorization codes.");
       }
     } catch (err) {
       console.error(err);
     } finally {
       setIsNuking(false);
     }
+  };
+
+  const handleTriggerDevEmailClient = () => {
+    if (Platform.OS === 'web') {
+      window.open('mailto:aryan30n@gmail.com?subject=Fieldo%20Web%20Support%20Ticket', '_self');
+    }
+  };
+
+  const handleGlobalLogout = async () => {
+    setIsSettingsOpen(false);
+    await signOut(auth); 
+    router.replace('/login');
   };
 
   const filteredSidebarRoster = useMemo(() => {
@@ -309,15 +314,46 @@ export default function HRMonolithicControlHub() {
     const attendanceMap = {};
     attendanceLogs.forEach(log => { attendanceMap[log.date] = log.hoursLogged; });
 
+    // 🟢 THRESHOLD: 5 minutes in hours (5 / 60 = ~0.0833 hrs)
+    const REQUIRED_HOURS_LIMIT = 5 / 60;
+    
+    // Normalize today's date for clean comparison (ignore time)
+    const now = new Date();
+    const todayNormalized = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
     const gridCells = [];
     for (let i = 0; i < firstDayIndex; i++) gridCells.push(<View key={`empty-${i}`} style={styles.calendarDayEmpty} />);
     
     for (let day = 1; day <= totalDaysInMonth; day++) {
       const dayString = `${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      const hoursLogged = attendanceMap[dayString] || 0;
+      const cellDate = new Date(calendarYear, calendarMonth, day);
+      const dayOfWeek = cellDate.getDay(); // 0 = Sunday, 6 = Saturday
       
-      const isPresent = hoursLogged >= 4.0;
+      // Calculate 2nd Saturday rule
+      let isSecondSaturday = false;
+      if (dayOfWeek === 6) {
+        let satCount = 0;
+        for (let d = 1; d <= day; d++) {
+          if (new Date(calendarYear, calendarMonth, d).getDay() === 6) satCount++;
+        }
+        if (satCount === 2) isSecondSaturday = true;
+      }
+
+      const isWeekend = dayOfWeek === 0 || isSecondSaturday; // Sunday or 2nd Saturday
+      const isPastOrToday = cellDate <= todayNormalized;
+      const hoursLogged = attendanceMap[dayString] || 0;
       const hasRecord = attendanceMap[dayString] !== undefined;
+
+      // 🟢 DOT STATUS DETERMINATION:
+      // - Weekends: Never show any absent indicator
+      // - Present: Recorded >= 5 mins (even if on weekend, shows green if worked)
+      // - Absent: Past working days with < 5 mins OR genuinely no record at all
+      let dotType = null;
+      if (hoursLogged >= REQUIRED_HOURS_LIMIT) {
+        dotType = 'present'; // 🟢 Green
+      } else if (!isWeekend && isPastOrToday) {
+        dotType = 'absent';  // 🔴 Red for genuine absence or incomplete shift
+      }
 
       gridCells.push(
         <TouchableOpacity 
@@ -327,7 +363,8 @@ export default function HRMonolithicControlHub() {
           disabled={!hasRecord}
         >
           <Text style={[styles.calendarDayText, selectedDate === dayString && styles.textWhite]}>{day}</Text>
-          {hasRecord && <View style={[styles.indicatorDot, isPresent ? styles.dotPresent : styles.dotAbsent]} />}
+          {dotType === 'present' && <View style={[styles.indicatorDot, styles.dotPresent]} />}
+          {dotType === 'absent' && <View style={[styles.indicatorDot, styles.dotAbsent]} />}
         </TouchableOpacity>
       );
     }
@@ -352,10 +389,9 @@ export default function HRMonolithicControlHub() {
 
   return (
     <View style={styles.container}>
-      {/* 🟢 OVERHAULED INTEGRATED NAVBAR HEADER BLOCK */}
+      {/* NAVBAR HEADER */}
       <View style={styles.header}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 20 }}>
-          {/* Shared Enterprise Vector Minimalist Branding Identity logo */}
           <View style={styles.webBrandGroup}>
             <View style={styles.webLogoWrapper}>
               <View style={styles.webLogoInnerDot} />
@@ -371,27 +407,20 @@ export default function HRMonolithicControlHub() {
           )}
         </View>
 
-        {/* 🟢 RIGHT HEADER TOOL ACTIONS: Notifications Bell, Nuke Trigger, & Session drop handlers */}
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-          {/* Notification Alert Launcher Bell */}
           <TouchableOpacity style={[styles.toolbarCircleBtn, notifications.length > 0 && styles.bellAlertPulseActive]} onPress={() => setIsNotifOpen(true)}>
             <Text style={{ fontSize: 16 }}>🔔</Text>
             {notifications.length > 0 && <View style={styles.badgeCountOverlay}><Text style={styles.badgeCountText}>{notifications.length}</Text></View>}
           </TouchableOpacity>
 
-          {/* Master Reset Pipeline Destructive Action Launcher Button */}
-          <TouchableOpacity style={[styles.toolbarCircleBtn, styles.dangerBorderCircle]} onPress={() => setIsNukeModalOpen(true)}>
-            <Text style={{ fontSize: 14 }}>💥</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.logoutButton} onPress={async () => { await signOut(auth); router.replace('/login'); }}>
-            <Text style={styles.textWhite}>Logout</Text>
+          <TouchableOpacity style={styles.toolbarCircleBtn} onPress={() => setIsSettingsOpen(true)}>
+            <Text style={{ fontSize: 16 }}>⚙️</Text>
           </TouchableOpacity>
         </View>
       </View>
 
       <View style={styles.mainContent}>
-        {/* LEFT WORKER DIRECTORY SIDEBAR */}
+        {/* SIDEBAR */}
         <View style={styles.sidebar}>
           <Text style={styles.sidebarTitle}>Employee Index</Text>
           <TextInput 
@@ -423,7 +452,7 @@ export default function HRMonolithicControlHub() {
           </ScrollView>
         </View>
 
-        {/* COMPONENT TAB PANELS VIEWPORTS */}
+        {/* WORKSPACE PANELS */}
         {currentTab === 'dbms' ? (
           <View style={styles.workspace}>
             <View style={styles.controlBar}>
@@ -445,7 +474,7 @@ export default function HRMonolithicControlHub() {
                   <Text style={[styles.th, { width: 130 }]}>Freq Client 3</Text>
                   <Text style={[styles.th, { width: 200 }]}>Corporate Email</Text>
                   <Text style={[styles.th, { width: 140 }]}>Mobile Phone</Text>
-                  <Text style={[styles.th, { width: 120, textAlign: 'center' }]}>Month Distance</Text> {/* 🟢 Live Column Added */}
+                  <Text style={[styles.th, { width: 120, textAlign: 'center' }]}>Month Distance</Text>
                   <Text style={[styles.th, { width: 100, textAlign: 'center' }]}>Month Days</Text>
                   <Text style={[styles.th, { width: 240, textAlign: 'center' }]}>Actions Control</Text>
                 </View>
@@ -465,7 +494,7 @@ export default function HRMonolithicControlHub() {
                         <Text style={[styles.td, { width: 130 }]}>{emp.freqClient3 || '-'}</Text>
                         {isEditing ? <TextInput style={[styles.inlineInput, { width: 190 }]} value={editFields.email} onChangeText={t=>setEditFields({...editFields, email:t})} /> : <Text style={[styles.td, { width: 200, fontSize: 12 }]}>{emp.email}</Text>}
                         {isEditing ? <TextInput style={[styles.inlineInput, { width: 130 }]} value={editFields.mobile} onChangeText={t=>setEditFields({...editFields, mobile:t})} /> : <Text style={[styles.td, { width: 140 }]}>{emp.mobile || '-'}</Text>}
-                        <Text style={[styles.td, { width: 120, textAlign: 'center', color: '#3B82F6', fontWeight: '800' }]}>{emp.totalDistance || 0.00} km</Text> {/* 🟢 Distance mapping integrated */}
+                        <Text style={[styles.td, { width: 120, textAlign: 'center', color: '#3B82F6', fontWeight: '800' }]}>{emp.totalDistance || 0.00} km</Text>
                         <Text style={[styles.td, { width: 100, textAlign: 'center', color: '#22C55E', fontWeight: '800' }]}>{emp.daysPresent} Days</Text>
                         <View style={{ width: 240, flexDirection: 'row', gap: 6, justifyContent: 'center' }}>
                           {isEditing ? (
@@ -475,7 +504,7 @@ export default function HRMonolithicControlHub() {
                             </>
                           ) : (
                             <>
-                              <TouchableOpacity style={styles.viewBtn} onPress={() => { setSelectedUser({ id: emp.userId, name: emp.firstName || emp.name }); setCurrentTab('tracking'); }}><Text style={{color:'#2563EB', fontWeight:'700'}}>🗺️ Track</Text></TouchableOpacity>
+                              <TouchableOpacity style={styles.viewBtn} onPress={() => { setSelectedUser({ id: emp.userId, name: emp.firstName || emp.name }); setCurrentTab('tracking'); }}><Text style={{color:'#2563EB', fontWeight:'700'}}>🗺️ Record</Text></TouchableOpacity>
                               <TouchableOpacity style={styles.editBtn} onPress={() => { setEditingRowId(emp._id); setEditFields({ email: emp.email, mobile: emp.mobile }); }}><Text style={{color:'#475569'}}>Edit</Text></TouchableOpacity>
                               <TouchableOpacity style={styles.deleteBtn} onPress={() => handleDeleteEmployee(emp._id)}><Text style={{color:'#FFFFFF', fontWeight:'700'}}>Wipe</Text></TouchableOpacity>
                             </>
@@ -493,7 +522,7 @@ export default function HRMonolithicControlHub() {
             <View style={styles.historyPanel}>
               <Text style={styles.panelHeading}>📊 Logs: {selectedUser.name}</Text>
               
-              <Text style={styles.sectionSubHeading}>Attendance Dashboard Tracker</Text>
+              <Text style={styles.sectionSubHeading}>Attendance Dashboard Recorder</Text>
               {renderCalendarGrid}
               
               <Text style={styles.sectionSubHeading}>Attendance History Logs</Text>
@@ -531,7 +560,7 @@ export default function HRMonolithicControlHub() {
         )}
       </View>
 
-      {/* NEW OPERATOR ACCOUNT REGISTRATION PANEL MODAL */}
+      {/* PROVISION MODAL */}
       <Modal visible={isModalOpen} animationType="fade" transparent>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalFormContent}>
@@ -551,7 +580,7 @@ export default function HRMonolithicControlHub() {
         </View>
       </Modal>
 
-      {/* 🟢 NEW: SLIDEOUT ACTIVE NOTIFICATIONS PANEL SIDEBOARD SYSTEM */}
+      {/* NOTIFICATIONS FLYOUT */}
       <Modal visible={isNotifOpen} animationType="slide" transparent>
         <View style={styles.sidebarModalBackdropRightLayout}>
           <Pressable style={{ flex: 1 }} onPress={() => setIsNotifOpen(false)} />
@@ -588,16 +617,49 @@ export default function HRMonolithicControlHub() {
         </View>
       </Modal>
 
-      {/* 🟢 NEW: MASTER NUCLEAR SYSTEM RESET ENFORCEMENT PROTOCOL MODAL */}
+      {/* 🟢 OVERHAULED CLEAN HR OPTIONS SETTINGS DRAWER MENU MODULE */}
+      <Modal visible={isSettingsOpen} animationType="slide" transparent>
+        <View style={styles.sidebarModalBackdropRightLayout}>
+          <Pressable style={{ flex: 1 }} onPress={() => setIsSettingsOpen(false)} />
+          <View style={[styles.rightFlyoutPanelContentWrapper, { backgroundColor: '#1E293B', borderColor: '#334155' }]}>
+            <View style={[styles.panelTitleHeaderContainerRow, { borderColor: '#334155' }]}>
+              <Text style={[styles.panelTitleLabelText, { color: '#FFFFFF' }]}>⚙️ Settings</Text>
+              <TouchableOpacity style={[styles.closeModalCrossIconBtn, { backgroundColor: '#334155' }]} onPress={() => setIsSettingsOpen(false)}>
+                <Text style={{ color: '#94A3B8', fontWeight: '800' }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={{ gap: 14, marginTop: 10 }}>
+              {/* Dev Contact Interactive Trigger Block */}
+              <TouchableOpacity style={styles.webSettingsInfoCard} onPress={handleTriggerDevEmailClient}>
+                <Text style={styles.webSettingsCardHeading}>Contact Dev</Text>
+                <Text style={{ color: '#94A3B8', fontSize: 13, marginTop: 2 }}>Build Version v2.4.0</Text>
+                <Text style={{ color: '#38BDF8', fontSize: 13, fontWeight: '600', marginTop: 4, textDecorationLine: 'underline' }}>aryan30n@gmail.com</Text>
+              </TouchableOpacity>
+
+              {/* Simplified Clean Options buttons as requested */}
+              <TouchableOpacity style={styles.webSettingsNukeActionBtn} onPress={() => setIsNukeModalOpen(true)}>
+                <Text style={{ color: '#EF4444', fontWeight: '800', fontSize: 14 }}>Reset</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.webSettingsLogoutBtn} onPress={handleGlobalLogout}>
+                <Text style={{ color: '#FFFFFF', fontWeight: '800', fontSize: 14 }}>Logout</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* SYSTEM NUKE PROTOCOL DIALOGUE */}
       <Modal visible={isNukeModalOpen} animationType="fade" transparent>
         <View style={styles.modalBackdrop}>
           <View style={[styles.modalFormContent, { width: 380, gap: 14, borderColor: '#EF4444', borderWidth: 1 }]}>
-            <Text style={{ fontSize: 16, fontWeight: '900', color: '#EF4444' }}>⚠️ CRITICAL RECOVERY PROTOCOL HARD RESET</Text>
+            <Text style={{ fontSize: 16, fontWeight: '900', color: '#EF4444' }}>⚠️ CRITICAL MASTER WIPE AUTHORIZATION</Text>
             <Text style={{ fontSize: 13, color: '#475569', lineHeight: 18 }}>
-              This operation is completely destructive and non-reversible. Executing this will permanently drop all registered employees, shift routes, client entries, and logs.
+              This operations will permanently delete your entire data permanently.
             </Text>
             <Text style={{ fontSize: 13, fontWeight: '700', color: '#1E293B' }}>
-              To proceed, verify your identity parameters by typing the signature string text <Text style={{ color: '#EF4444' }}>"delete"</Text> below:
+              Verify security compliance loops by typing the keyword <Text style={{ color: '#EF4444' }}>"delete"</Text> below:
             </Text>
 
             <TextInput 
@@ -611,20 +673,17 @@ export default function HRMonolithicControlHub() {
 
             <View style={{ flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
               <Button title="Cancel" onPress={() => { setIsNukeModalOpen(false); setNukeConfirmText(''); }} color="#64748B" disabled={isNuking} />
-              <Button title={isNuking ? "Wiping Node Layers..." : "Wipe Cloud Infrastructure"} onPress={handleExecuteMasterSystemNuke} color="#EF4444" disabled={isNuking || nukeConfirmText !== 'delete'} />
+              <Button title={isNuking ? "Purging..." : "Confirm"} onPress={handleExecuteMasterSystemNuke} color="#EF4444" disabled={isNuking || nukeConfirmText !== 'delete'} />
             </View>
           </View>
         </View>
       </Modal>
-
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8FAFC' },
-  
-  // 🟢 NEW VECTOR STATIONS EMBEDDED BRANDING HEADER NAVBAR RULES
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingVertical: 14, backgroundColor: '#0F172A', borderBottomWidth: 1, borderColor: '#1E293B' },
   webBrandGroup: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   webLogoWrapper: { width: 22, height: 22, borderRadius: 6, backgroundColor: '#3B82F6', justifyContent: 'center', alignItems: 'center' },
@@ -632,15 +691,11 @@ const styles = StyleSheet.create({
   webBrandLogotype: { color: '#FFFFFF', fontSize: 16, fontWeight: '900', letterSpacing: 2 },
   badgeHubStation: { backgroundColor: 'rgba(59, 130, 246, 0.15)', borderWidth: 1, borderColor: '#3B82F6', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
   badgeHubText: { color: '#3B82F6', fontSize: 10, fontWeight: '800' },
-  toolbarCircleBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#1E293B', alignItems: 'center', justifyContent: 'center', borderContext: 'none', position: 'relative' },
-  dangerBorderCircle: { borderColor: 'rgba(239, 68, 68, 0.4)', borderWidth: 1 },
+  toolbarCircleBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#1E293B', alignItems: 'center', justifyContent: 'center', position: 'relative', cursor: 'pointer' },
   badgeCountOverlay: { position: 'absolute', top: -4, right: -4, backgroundColor: '#EF4444', minWidth: 16, height: 16, borderRadius: 8, paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center' },
   badgeCountText: { color: '#FFFFFF', fontSize: 9, fontWeight: '900' },
   bellAlertPulseActive: { borderColor: '#F59E0B', borderWidth: 1, backgroundColor: 'rgba(245, 158, 11, 0.1)' },
-
-  title: { fontSize: 16, fontWeight: '900', color: '#F8FAFC' },
   backBtn: { backgroundColor: '#334155', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 },
-  logoutButton: { backgroundColor: '#EF4444', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 },
   textWhite: { color: '#FFFFFF', fontWeight: '700' },
   mainContent: { flex: 1, flexDirection: 'row' },
   sidebar: { width: 240, backgroundColor: '#FFFFFF', borderRightWidth: 1, borderColor: '#E2E8F0', padding: 14 },
@@ -701,14 +756,12 @@ const styles = StyleSheet.create({
   modalFormContent: { backgroundColor: '#FFF', padding: 20, borderRadius: 12, width: 360, gap: 10 },
   formInput: { backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E2E8F0', padding: 8, borderRadius: 6, fontSize: 13, color: '#1E293B' },
 
-  // 🟢 NEW SLIDEOUT NOTIFICATIONS LAYER SIDE PANEL STYLING BLOCKS
-  sidebarSampleOverlay: { flex: 1 },
   sidebarModalBackdropRightLayout: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.4)', flexDirection: 'row', zIndex: 100 },
   rightFlyoutPanelContentWrapper: { width: 340, height: '100%', backgroundColor: '#FFFFFF', borderLeftWidth: 1, borderColor: '#E2E8F0', padding: 20, gap: 12 },
   panelTitleHeaderContainerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderBottomWidth: 1, borderColor: '#F1F5F9', paddingBottom: 12 },
   panelTitleLabelText: { fontSize: 15, fontWeight: '900', color: '#0F172A' },
   closeModalCrossIconBtn: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#F1F5F9', alignItems: 'center', justifyContent: 'center' },
-  notifCardContainerItem: { backgroundColor: '#F8FAFC', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#E2E8F0', cursor: 'pointer' },
+  notifCardContainerItem: { backgroundColor: '#F8FAFC', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#E2E8F0' },
   notifCardItemExpandedBackground: { borderColor: '#3B82F6', backgroundColor: '#EFF6FF' },
   notifCardSenderLabel: { fontSize: 11, fontWeight: '800', color: '#64748B', textTransform: 'uppercase' },
   notifCardSubjectText: { fontSize: 13, fontWeight: '700', color: '#1E293B', marginTop: 4 },
@@ -717,5 +770,10 @@ const styles = StyleSheet.create({
   notifCardDescriptionBodyText: { fontSize: 13, color: '#334155', lineHeight: 18 },
   notifBtnKeep: { backgroundColor: '#E2E8F0', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 4 },
   notifBtnSolved: { backgroundColor: '#22C55E', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 4 },
-  emptyNotifsTextFallbackStyle: { fontSize: 12, color: '#94A3B8', fontStyle: 'italic', textAlign: 'center', marginTop: 30 }
+  emptyNotifsTextFallbackStyle: { fontSize: 12, color: '#94A3B8', fontStyle: 'italic', textAlign: 'center', marginTop: 30 },
+
+  webSettingsInfoCard: { backgroundColor: '#1E293B', borderColor: '#334155', borderWidth: 1, padding: 14, borderRadius: 10, borderStyle: 'dashed', gap: 4, cursor: 'pointer' },
+  webSettingsCardHeading: { color: '#38BDF8', fontSize: 12, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5 },
+  webSettingsNukeActionBtn: { backgroundColor: 'rgba(239, 68, 68, 0.15)', borderColor: '#EF4444', borderWidth: 1, paddingVertical: 12, borderRadius: 8, alignItems: 'center', marginTop: 10, cursor: 'pointer' },
+  webSettingsLogoutBtn: { backgroundColor: '#334155', paddingVertical: 12, borderRadius: 8, alignItems: 'center', marginTop: 6, cursor: 'pointer' }
 });

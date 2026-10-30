@@ -154,7 +154,7 @@ app.get('/api/hr/employees', async (req, res) => {
             if (delta > 0 && delta <= 5 * 60 * 1000) activeTrackingMs += delta;
           }
 
-          if ((activeTrackingMs / 3600000) >= 4.0) daysPresentCount++;
+          if (activeTrackingMs >= (5 * 60 * 1000)) daysPresentCount++;
         }
       });
 
