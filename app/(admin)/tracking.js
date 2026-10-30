@@ -5,7 +5,7 @@ import { collection, onSnapshot } from 'firebase/firestore';
 import { db } from '../../src/services/firebaseConfig';
 
 let WebMap = null;
-if (Platform.OS === 'web') {
+if (Platform.OS === 'web' && typeof window !== 'undefined') {
   WebMap = require('../../src/components/WebMap').default;
 }
 

@@ -7,7 +7,7 @@ import { auth, db } from '../../src/services/firebaseConfig';
 import io from 'socket.io-client';
 
 let WebMap = null;
-if (Platform.OS === 'web') {
+if (Platform.OS === 'web' && typeof window !== 'undefined') {
   WebMap = require('../../src/components/WebMap').default;
 }
 
@@ -317,7 +317,7 @@ export default function HRMonolithicControlHub() {
     });
   }, [roster, dbmsSearch, areaFilter]);
 
-  // CALENDAR GRID WITH 5-MINUTE THRESHOLD AND GENUINE ABSENCE LOGIC
+  // 🟢 CALENDAR GRID WITH 5-MINUTE THRESHOLD AND GENUINE ABSENCE LOGIC
   const renderCalendarGrid = useMemo(() => {
     if (!selectedUser.id) return null;
     const firstDayIndex = new Date(calendarYear, calendarMonth, 1).getDay();
@@ -328,6 +328,7 @@ export default function HRMonolithicControlHub() {
     // 5 minutes in hours (5 / 60 = ~0.0833 hrs)
     const REQUIRED_HOURS_LIMIT = 5 / 60;
     
+    // 🟢 NEW: Strict "Past Day" threshold rule
     const now = new Date();
     const todayNormalized = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
@@ -349,14 +350,16 @@ export default function HRMonolithicControlHub() {
       }
 
       const isWeekend = dayOfWeek === 0 || isSecondSaturday;
-      const isPastOrToday = cellDate <= todayNormalized;
+      const isPastDay = cellDate < todayNormalized; // 🟢 STRICTLY in the past (ignores today)
       const hoursLogged = attendanceMap[dayString] || 0;
       const hasRecord = attendanceMap[dayString] !== undefined;
 
       let dotType = null;
+      
+      // 🟢 CORRECTED LOGIC: Today stays blank if hours aren't met yet
       if (hoursLogged >= REQUIRED_HOURS_LIMIT) {
         dotType = 'present';
-      } else if (!isWeekend && isPastOrToday) {
+      } else if (!isWeekend && isPastDay) {
         dotType = 'absent';
       }
 

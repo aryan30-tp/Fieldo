@@ -137,7 +137,6 @@ export default function TrackerScreen() {
     return () => clearInterval(sessionVerificationTimer);
   }, [user, isTracking, locationSub, router]);
 
-  // Fetch Personal Employee History Logs
   const loadMyHistoryData = useCallback(async () => {
     if (!user) return;
     try {
@@ -158,7 +157,6 @@ export default function TrackerScreen() {
     }
   }, [activeTab, loadMyHistoryData]);
 
-  // Load past map path line for the employee to review
   const handleViewPastDayRoute = async (date) => {
     if (viewingPastDate === date) {
       setViewingPastDate(null);
@@ -456,18 +454,21 @@ export default function TrackerScreen() {
     return myVisitNotes.filter(n => n.date === viewingPastDate);
   }, [myVisitNotes, viewingPastDate]);
 
-  // 🟢 NATIVE MOBILE ROW FLEXBOX GRID CALENDAR COMPONENT ENFORCEMENT
+  // 🟢 MOBILE CALENDAR COMPONENT
   const renderMobileCalendar = useMemo(() => {
     if (!user) return null;
     
     const firstDayIndex = new Date(calendarYear, calendarMonth, 1).getDay();
     const totalDaysInMonth = new Date(calendarYear, calendarMonth + 1, 0).getDate();
-    const todayDate = new Date();
+    
+    // 🟢 NEW: Strict "Past Day" threshold rule
+    const now = new Date();
+    const todayNormalized = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const REQUIRED_HOURS_LIMIT = 5 / 60; // 5 minutes
     
     const attendanceMap = {};
     myAttendanceLogs.forEach(log => { attendanceMap[log.date] = log.hoursLogged; });
 
-    // Build flat array of days including padding empty blocks
     const flatCells = [];
     for (let i = 0; i < firstDayIndex; i++) {
       flatCells.push({ type: 'empty', id: `empty-${i}` });
@@ -476,9 +477,8 @@ export default function TrackerScreen() {
     for (let day = 1; day <= totalDaysInMonth; day++) {
       const dayString = `${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
       const targetDate = new Date(calendarYear, calendarMonth, day);
-      const dayOfWeek = targetDate.getDay(); // 0 = Sunday, 6 = Saturday
+      const dayOfWeek = targetDate.getDay(); 
       
-      // Calculate 2nd Saturday parameters
       let isSecondSaturday = false;
       if (dayOfWeek === 6) {
         let satCount = 0;
@@ -490,19 +490,17 @@ export default function TrackerScreen() {
 
       const hoursLogged = attendanceMap[dayString] || 0;
       const hasRecord = attendanceMap[dayString] !== undefined;
-      const isPastOrToday = targetDate <= todayDate;
+      const isPastDay = targetDate < todayNormalized; // 🟢 STRICTLY in the past (ignores today)
       
-      let indicator = 'none'; // 'none', 'present', 'absent'
+      let indicator = 'none'; 
 
-      // 🟢 APPLY STRICT ADU MATRIX HOLIDAY AND ABSENCE FILTERS
+      // 🟢 CORRECTED LOGIC: Today stays blank if hours aren't met yet
       if (dayOfWeek === 0 || isSecondSaturday) {
-        indicator = 'none'; // Sundays and 2nd Saturdays stay clear
-      } else if (isPastOrToday) {
-        if (hasRecord && hoursLogged >= 4.0) {
-          indicator = 'present';
-        } else {
-          indicator = 'absent'; // Marks absent automatically if low hours OR timer wasn't started
-        }
+        indicator = 'none'; 
+      } else if (hoursLogged >= REQUIRED_HOURS_LIMIT) {
+        indicator = 'present';
+      } else if (isPastDay) {
+        indicator = 'absent';
       }
 
       flatCells.push({
@@ -514,7 +512,6 @@ export default function TrackerScreen() {
       });
     }
 
-    // Wrap the cells into clean flex rows of 7 items each to enforce native grid layouts
     const rows = [];
     let currentRow = [];
     
@@ -533,12 +530,10 @@ export default function TrackerScreen() {
       <View style={[styles.calendarWrapper, isDarkMode ? styles.cardDarkBg : styles.cardLightBg]}>
         <Text style={[styles.calendarSectionLabel, isDarkMode ? styles.textLightMode : styles.textDarkMode]}>Attendance Grid Calendar</Text>
         
-        {/* Day Header Row labels */}
         <View style={styles.calendarFlexRowHeader}>
           {['S','M','T','W','T','F','S'].map((d,i)=><Text key={i} style={styles.calendarDayHeaderLabel}>{d}</Text>)}
         </View>
 
-        {/* Dynamic Data Rows mapping loop segments */}
         {rows.map((row, rowIndex) => (
           <View key={`row-${rowIndex}`} style={styles.calendarFlexRowMatrix}>
             {row.map((cell) => {
@@ -737,7 +732,6 @@ export default function TrackerScreen() {
                 <Text style={styles.devCardEmailLabelText}>aryan30n@gmail.com</Text>
               </Pressable>
 
-              {/* Simplified Button text signature label rules */}
               <Pressable style={styles.drawerLogOutActionBtnContainer} onPress={handleGlobalLogoutAction}>
                 <Text style={styles.drawerLogOutText}>Logout</Text>
               </Pressable>
@@ -867,7 +861,6 @@ const styles = StyleSheet.create({
   pastNoteCardCompany: { fontSize: 12, fontWeight: '700' },
   pastNoteCardSummary: { color: '#64748B', fontSize: 12, fontStyle: 'italic', marginTop: 1 },
 
-  // 🟢 FIXED CALENDAR STRUCTURAL FLEXBOX MATRIX MULTI-CELL ALIGNMENTS
   calendarWrapper: { borderRadius: 14, borderWidth: 1, padding: 14, marginHorizontal: 20, gap: 8 },
   calendarSectionLabel: { fontSize: 12, fontWeight: '800', textTransform: 'uppercase', color: '#38BDF8' },
   calendarFlexRowHeader: { flexDirection: 'row', justifyContent: 'space-between', width: '100%', paddingVertical: 4 },
