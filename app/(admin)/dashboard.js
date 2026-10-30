@@ -86,8 +86,18 @@ export default function HRMonolithicControlHub() {
         fetch(`https://fieldo.onrender.com/api/attendance/${targetId}`),
         fetch(`https://fieldo.onrender.com/api/visits?userId=${targetId}`)
       ]);
-      setAttendanceLogs(attRes.ok ? await attRes.json() : []);
+      const logs = attRes.ok ? await attRes.json() : [];
+      setAttendanceLogs(logs);
       setVisitNotes(visitRes.ok ? await visitRes.json() : []);
+
+      // Auto-jump calendar view to the latest logged date if available
+      if (logs.length > 0 && logs[0].date) {
+        const [y, m] = logs[0].date.split('-').map(Number);
+        if (y && m) {
+          setCalendarYear(y);
+          setCalendarMonth(m - 1);
+        }
+      }
     } catch (err) {
       console.error(err);
     }
