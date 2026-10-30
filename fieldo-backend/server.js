@@ -43,7 +43,6 @@ const EmployeeSchema = new mongoose.Schema({
 });
 const Employee = mongoose.model('Employee', EmployeeSchema);
 
-// 🟢 NEW: Notification Schema for Issue Reporting
 const NotificationSchema = new mongoose.Schema({
   userId: String,
   employeeName: String,
@@ -141,12 +140,10 @@ app.get('/api/hr/employees', async (req, res) => {
           for (let i = 1; i < sortedPoints.length; i++) {
             const delta = sortedPoints[i].timestamp - sortedPoints[i - 1].timestamp;
             
-            // 🗺️ Mileage accumulation logic
             const kmGained = calculateDistanceKM(
               sortedPoints[i - 1].lat, sortedPoints[i - 1].lng,
               sortedPoints[i].lat, sortedPoints[i].lng
             );
-            // Ignore suspicious telemetry spikes above 120km/h
             if (kmGained > 0 && kmGained < 10) {
               totalDistanceThisMonth += kmGained;
             }
@@ -154,6 +151,7 @@ app.get('/api/hr/employees', async (req, res) => {
             if (delta > 0 && delta <= 5 * 60 * 1000) activeTrackingMs += delta;
           }
 
+          // 🟢 5-minute threshold check (5 * 60 * 1000 ms = 300,000 ms)
           if (activeTrackingMs >= (5 * 60 * 1000)) daysPresentCount++;
         }
       });
@@ -185,7 +183,7 @@ app.get('/api/hr/employees', async (req, res) => {
         email: emp.email,
         mobile: emp.mobile || '-',
         daysPresent: daysPresentCount,
-        totalDistance: parseFloat(totalDistanceThisMonth.toFixed(2)), // 🟢 Live Distance Metric Added
+        totalDistance: parseFloat(totalDistanceThisMonth.toFixed(2)),
         freqClient1: topClients[0]?._id || '-',
         freqClient2: topClients[1]?._id || '-',
         freqClient3: topClients[2]?._id || '-'
@@ -308,15 +306,13 @@ app.post('/api/visits/sync-offline', async (req, res) => {
   } catch (err) { res.status(500).json({ error: "Cache rejected" }); }
 });
 
-// --- 5. 🟢 NEW: NOTIFICATION ISSUE ENGINE ENDPOINTS ---
+// --- 5. NOTIFICATION ISSUE ENGINE ENDPOINTS ---
 
 app.post('/api/notifications/report', async (req, res) => {
   const { userId, employeeName, subject, description } = req.body;
   try {
     const problemRecord = new Notification({ userId, employeeName, subject, description });
     await problemRecord.save();
-    
-    // Broadcast live over websockets layout instantly to all connected monitors
     io.emit('ui-sync-notification-received', problemRecord);
     res.status(201).json({ success: true, notification: problemRecord });
   } catch (err) {
@@ -343,7 +339,7 @@ app.delete('/api/notifications/:id', async (req, res) => {
   }
 });
 
-// --- 6. 🟢 NEW: ENTERPRISE NUKE RESET ACTION ---
+// --- 6. ENTERPRISE NUKE RESET ACTION ---
 app.post('/api/system/nuke-reset', async (req, res) => {
   const { confirmToken } = req.body;
   if (confirmToken !== "MASTER_DELETE_CONFIRMED") {
@@ -372,6 +368,21 @@ io.on('connection', (socket) => {
   socket.on('location-update', async (data) => {
     const { userId, name, lat, lng, timestamp } = data;
     socket.broadcast.emit('hr-location-stream', { userId, name, lat, lng, timestamp });
+    
+    // 🟢 FIXED: Save live online points directly into MongoDB so they appear in History Logs!
+    try {
+      const dateStr = new Date(timestamp).toISOString().split('T')[0];
+      await Route.updateOne(
+        { userId, date: dateStr },
+        { 
+          $set: { name, lastPing: timestamp },
+          $push: { points: { lat, lng, timestamp } }
+        },
+        { upsert: true }
+      );
+    } catch (err) {
+      console.error("Socket DB Save Error:", err);
+    }
   });
 });
 
