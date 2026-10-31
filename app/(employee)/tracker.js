@@ -10,27 +10,70 @@ import { BACKGROUND_LOCATION_TASK } from '../../src/services/locationTask';
 import socketInstance from '../../src/services/socket';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
+import { WebView } from 'react-native-webview';
 
 const OFFLINE_STORAGE_KEY = '@fieldo_offline_points';
 const OFFLINE_VISITS_KEY = '@fieldo_offline_visits';
 
+function OSMMap({ style, center, routePoints = [] }) {
+  const mapHtml = useMemo(() => {
+    if (!center) return '';
+
+    const latitude = Number(center.latitude);
+    const longitude = Number(center.longitude);
+    const route = routePoints
+      .map((point) => [Number(point.latitude), Number(point.longitude)])
+      .filter(([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng));
+
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return '';
+
+    return `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+          <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+          <style>
+            html, body, #map { height: 100%; width: 100%; margin: 0; padding: 0; }
+          </style>
+        </head>
+        <body>
+          <div id="map"></div>
+          <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+          <script>
+            const center = [${latitude}, ${longitude}];
+            const route = ${JSON.stringify(route)};
+            const map = L.map('map', { zoomControl: false }).setView(center, 15);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+              maxZoom: 19,
+              attribution: '&copy; OpenStreetMap contributors'
+            }).addTo(map);
+            L.marker(center).addTo(map);
+            if (route.length > 0) {
+              L.polyline(route, { color: '#38BDF8', weight: 6 }).addTo(map);
+            }
+          </script>
+        </body>
+      </html>
+    `;
+  }, [center, routePoints]);
+
+  if (!mapHtml) return null;
+
+  return (
+    <WebView
+      source={{ html: mapHtml }}
+      style={style}
+      originWhitelist={['*']}
+      javaScriptEnabled
+      domStorageEnabled
+      scrollEnabled={false}
+    />
+  );
+}
+
 export default function TrackerScreen() {
   const router = useRouter();
-  const mapComponents = useMemo(() => {
-    if (Platform.OS === 'web') return null;
-
-    try {
-      const Maps = require('react-native-maps');
-      return {
-        MapView: Maps.default,
-        Polyline: Maps.Polyline,
-        Marker: Maps.Marker,
-      };
-    } catch (error) {
-      console.error('Unable to load native map components:', error);
-      return null;
-    }
-  }, []);
   const [user, setUser] = useState(null);
   const [isTracking, setIsTracking] = useState(false);
   const [locationSub, setLocationSub] = useState(null);
@@ -68,10 +111,6 @@ export default function TrackerScreen() {
 
   const [calendarMonth, setCalendarMonth] = useState(new Date().getMonth());
   const [calendarYear, setCalendarYear] = useState(new Date().getFullYear());
-
-  const MapView = mapComponents?.MapView;
-  const Polyline = mapComponents?.Polyline;
-  const Marker = mapComponents?.Marker;
 
   // Auth Listener & Profile Sync
   useEffect(() => {
@@ -609,10 +648,8 @@ export default function TrackerScreen() {
         <View style={{ flex: 1 }}>
           {Platform.OS === 'web' ? (
             <View style={styles.loadingMap}><Text style={{ color: '#94A3B8' }}>Available on mobile apps only.</Text></View>
-          ) : currentCoords && MapView ? (
-            <MapView style={styles.map} region={currentCoords} showsUserLocation={true} followsUserLocation={true}>
-              {routePoints.length > 0 && Polyline && <Polyline coordinates={routePoints} strokeColor="#38BDF8" strokeWidth={6} />}
-            </MapView>
+          ) : currentCoords ? (
+            <OSMMap style={styles.map} center={currentCoords} routePoints={routePoints} />
           ) : (
             <View style={styles.loadingMap}><Text style={{ color: '#94A3B8' }}>Finding location...</Text></View>
           )}
@@ -663,23 +700,13 @@ export default function TrackerScreen() {
                       <Text style={styles.embeddedPaneTitleLabel}>Route Trail Map</Text>
                       {isLoadingPastRoute ? (
                         <ActivityIndicator color="#38BDF8" style={{ marginVertical: 12 }} />
-                      ) : Platform.OS !== 'web' && MapView && pastRoutePoints.length > 0 ? (
+                      ) : Platform.OS !== 'web' && pastRoutePoints.length > 0 ? (
                         <View style={styles.miniMapContainerWrapper}>
-                          <MapView 
-                            style={styles.miniMapElementStyles} 
-                            initialRegion={{
-                              latitude: pastRoutePoints[0].latitude,
-                              longitude: pastRoutePoints[0].longitude,
-                              latitudeDelta: 0.02,
-                              longitudeDelta: 0.02
-                            }}
-                            scrollEnabled={true}
-                            zoomEnabled={true}
-                          >
-                            <Polyline coordinates={pastRoutePoints} strokeColor="#38BDF8" strokeWidth={4} />
-                            <Marker coordinate={pastRoutePoints[0]} title="Start Location" />
-                            <Marker coordinate={pastRoutePoints[pastRoutePoints.length - 1]} title="End Location" pinColor="#EF4444" />
-                          </MapView>
+                          <OSMMap
+                            style={styles.miniMapElementStyles}
+                            center={pastRoutePoints[0]}
+                            routePoints={pastRoutePoints}
+                          />
                         </View>
                       ) : (
                         <Text style={styles.emptyLogsPastLabelFallback}>No GPS trajectory line generated for this day.</Text>
