@@ -410,19 +410,19 @@ export default function HRMonolithicControlHub() {
 
           {currentTab === 'tracking' && (
             <TouchableOpacity style={styles.backBtn} onPress={() => setCurrentTab('dbms')}>
-              <Text style={styles.textWhite}>📋 Show Master Table Records</Text>
+              <Text style={styles.textWhite}>Back to employee records</Text>
             </TouchableOpacity>
           )}
         </View>
 
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
           <TouchableOpacity style={[styles.toolbarCircleBtn, notifications.length > 0 && styles.bellAlertPulseActive]} onPress={() => setIsNotifOpen(true)}>
-            <Text style={{ fontSize: 16 }}>🔔</Text>
+            <Text style={styles.toolbarIconText}>Alerts</Text>
             {notifications.length > 0 && <View style={styles.badgeCountOverlay}><Text style={styles.badgeCountText}>{notifications.length}</Text></View>}
           </TouchableOpacity>
 
           <TouchableOpacity style={styles.toolbarCircleBtn} onPress={() => setIsSettingsOpen(true)}>
-            <Text style={{ fontSize: 16 }}>⚙️</Text>
+            <Text style={styles.toolbarIconText}>Settings</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -464,9 +464,9 @@ export default function HRMonolithicControlHub() {
         {currentTab === 'dbms' ? (
           <View style={styles.workspace}>
             <View style={styles.controlBar}>
-              <TextInput style={styles.tableInputFilter} placeholder="🔍 Filter metrics by name or asset key..." placeholderTextColor="#94A3B8" value={dbmsSearch} onChangeText={setDbmsSearch} />
-              <TextInput style={[styles.tableInputFilter, { width: 180, flex: 0 }]} placeholder="📍 Base City..." placeholderTextColor="#94A3B8" value={areaFilter} onChangeText={setAreaFilter} />
-              <TouchableOpacity style={styles.primaryBtn} onPress={() => setIsModalOpen(true)}><Text style={styles.btnText}>➕ Provision Employee</Text></TouchableOpacity>
+              <TextInput style={styles.tableInputFilter} placeholder="Filter by employee or ID..." placeholderTextColor="#94A3B8" value={dbmsSearch} onChangeText={setDbmsSearch} />
+              <TextInput style={[styles.tableInputFilter, { width: 180, flex: 0 }]} placeholder="Base city..." placeholderTextColor="#94A3B8" value={areaFilter} onChangeText={setAreaFilter} />
+              <TouchableOpacity style={styles.primaryBtn} onPress={() => setIsModalOpen(true)}><Text style={styles.btnText}>Add employee</Text></TouchableOpacity>
             </View>
 
             <ScrollView horizontal showsHorizontalScrollIndicator style={styles.tableScroll}>
@@ -496,7 +496,7 @@ export default function HRMonolithicControlHub() {
                         <Text style={[styles.td, { width: 120 }]}>{emp.firstName || emp.name}</Text>
                         <Text style={[styles.td, { width: 120 }]}>{emp.lastName || '-'}</Text>
                         <Text style={[styles.td, { width: 120, color: '#475569' }]}>Gurugram</Text>
-                        <View style={{ width: 130 }}><View style={[styles.badge, isTravelling ? styles.badgeTravel : styles.badgeHome]}><Text style={{fontSize:11, fontWeight:'700', color:isTravelling?'#0369A1':'#166534'}}>📍 {isTravelling?emp.area:'Gurugram'}</Text></View></View>
+                        <View style={{ width: 130 }}><View style={[styles.badge, isTravelling ? styles.badgeTravel : styles.badgeHome]}><Text style={{fontSize:11, fontWeight:'700', color:isTravelling?'#245B80':'#2F6B4F'}}>{isTravelling?emp.area:'Gurugram'}</Text></View></View>
                         <Text style={[styles.td, { width: 130, color: '#0EA5E9', fontWeight: '700' }]}>{emp.freqClient1 || '-'}</Text>
                         <Text style={[styles.td, { width: 130 }]}>{emp.freqClient2 || '-'}</Text>
                         <Text style={[styles.td, { width: 130 }]}>{emp.freqClient3 || '-'}</Text>
@@ -512,7 +512,7 @@ export default function HRMonolithicControlHub() {
                             </>
                           ) : (
                             <>
-                              <TouchableOpacity style={styles.viewBtn} onPress={() => { setSelectedUser({ id: emp.userId, name: emp.firstName || emp.name }); setCurrentTab('tracking'); }}><Text style={{color:'#2563EB', fontWeight:'700'}}>🗺️ Record</Text></TouchableOpacity>
+                              <TouchableOpacity style={styles.viewBtn} onPress={() => { setSelectedUser({ id: emp.userId, name: emp.firstName || emp.name }); setCurrentTab('tracking'); }}><Text style={{color:'#245B80', fontWeight:'700'}}>View record</Text></TouchableOpacity>
                               <TouchableOpacity style={styles.editBtn} onPress={() => { setEditingRowId(emp._id); setEditFields({ email: emp.email, mobile: emp.mobile }); }}><Text style={{color:'#475569'}}>Edit</Text></TouchableOpacity>
                               <TouchableOpacity style={styles.deleteBtn} onPress={() => handleDeleteEmployee(emp._id)}><Text style={{color:'#FFFFFF', fontWeight:'700'}}>Wipe</Text></TouchableOpacity>
                             </>
@@ -528,7 +528,7 @@ export default function HRMonolithicControlHub() {
         ) : (
           <View style={styles.workspaceSplit}>
             <View style={styles.historyPanel}>
-              <Text style={styles.panelHeading}>📊 Logs: {selectedUser.name}</Text>
+              <Text style={styles.panelHeading}>Attendance logs: {selectedUser.name}</Text>
               
               <Text style={styles.sectionSubHeading}>Attendance Dashboard Recorder</Text>
               {renderCalendarGrid}
@@ -537,7 +537,7 @@ export default function HRMonolithicControlHub() {
               <ScrollView style={styles.listBlock} nestedScrollEnabled showsVerticalScrollIndicator={false}>
                 {attendanceLogs.map(l => (
                   <TouchableOpacity key={l.date} style={[styles.historyRow, selectedDate === l.date && styles.historyRowActive]} onPress={() => handleLoadRouteReplay(l.date)}>
-                    <Text style={[styles.rowDate, selectedDate === l.date && styles.textWhite]}>📅 {l.date}</Text>
+                    <Text style={[styles.rowDate, selectedDate === l.date && styles.textWhite]}>{l.date}</Text>
                     <Text style={[styles.rowHours, selectedDate === l.date && {color:'#BFDBFE'}]}>{l.hoursLogged.toFixed(2)} Hrs</Text>
                   </TouchableOpacity>
                 ))}
@@ -579,7 +579,7 @@ export default function HRMonolithicControlHub() {
             <TextInput style={styles.formInput} placeholder="Assigned Territory Area" placeholderTextColor="#64748B" value={formData.area} onChangeText={(t)=>setFormData({...formData, area:t})} />
             <TextInput style={styles.formInput} placeholder="Email" placeholderTextColor="#64748B" value={formData.email} onChangeText={(t)=>setFormData({...formData, email:t})} autoCapitalize="none" />
             <TextInput style={styles.formInput} placeholder="Mobile Contact" placeholderTextColor="#64748B" value={formData.mobile} onChangeText={(t)=>setFormData({...formData, mobile:t})} />
-            <Text style={{fontSize:11, color:'#64748B', backgroundColor:'#F1F5F9', padding:6, borderRadius:4}}>⚠️ Access key parameters initialized as: "employee".</Text>
+            <Text style={{fontSize:11, color:'#64748B', backgroundColor:'#F1F5F9', padding:6, borderRadius:4}}>Default employee access key: "employee".</Text>
             <View style={{flexDirection:'row', justifyContent:'flex-end', gap:8}}>
               <Button title="Cancel" onPress={() => setIsModalOpen(false)} color="#64748B" />
               <Button title={isSubmitting ? "Processing..." : "Register User"} onPress={handleAddEmployee} disabled={isSubmitting} color="#3B82F6" />
@@ -594,7 +594,7 @@ export default function HRMonolithicControlHub() {
           <Pressable style={{ flex: 1 }} onPress={() => setIsNotifOpen(false)} />
           <View style={styles.rightFlyoutPanelContentWrapper}>
             <View style={styles.panelTitleHeaderContainerRow}>
-              <Text style={styles.panelTitleLabelText}>⚠️ Field Diagnostic Issues</Text>
+              <Text style={styles.panelTitleLabelText}>Field diagnostic issues</Text>
               <TouchableOpacity style={styles.closeModalCrossIconBtn} onPress={() => setIsNotifOpen(false)}><Text style={{ color: '#94A3B8', fontWeight: '800' }}>✕</Text></TouchableOpacity>
             </View>
 
@@ -604,7 +604,7 @@ export default function HRMonolithicControlHub() {
                 return (
                   <TouchableOpacity key={notif._id} style={[styles.notifCardContainerItem, isExpanded && styles.notifCardItemExpandedBackground]} onPress={() => setExpandedNotifId(isExpanded ? null : notif._id)}>
                     <Text style={styles.notifCardSenderLabel}>From: {notif.employeeName || 'Operator'}</Text>
-                    <Text style={styles.notifCardSubjectText}>📌 {notif.subject}</Text>
+                    <Text style={styles.notifCardSubjectText}>{notif.subject}</Text>
                     <Text style={styles.notifCardTimestampText}>{new Date(notif.timestamp).toLocaleTimeString()}</Text>
 
                     {isExpanded && (
@@ -631,7 +631,7 @@ export default function HRMonolithicControlHub() {
           <Pressable style={{ flex: 1 }} onPress={() => setIsSettingsOpen(false)} />
           <View style={[styles.rightFlyoutPanelContentWrapper, { backgroundColor: '#1E293B', borderColor: '#334155' }]}>
             <View style={[styles.panelTitleHeaderContainerRow, { borderColor: '#334155' }]}>
-              <Text style={[styles.panelTitleLabelText, { color: '#FFFFFF' }]}>⚙️ Settings</Text>
+              <Text style={[styles.panelTitleLabelText, { color: '#FFFFFF' }]}>Settings</Text>
               <TouchableOpacity style={[styles.closeModalCrossIconBtn, { backgroundColor: '#334155' }]} onPress={() => setIsSettingsOpen(false)}>
                 <Text style={{ color: '#94A3B8', fontWeight: '800' }}>✕</Text>
               </TouchableOpacity>
@@ -660,7 +660,7 @@ export default function HRMonolithicControlHub() {
       <Modal visible={isNukeModalOpen} animationType="fade" transparent>
         <View style={styles.modalBackdrop}>
           <View style={[styles.modalFormContent, { width: 380, gap: 14, borderColor: '#EF4444', borderWidth: 1 }]}>
-            <Text style={{ fontSize: 16, fontWeight: '900', color: '#EF4444' }}>⚠️ CRITICAL MASTER WIPE AUTHORIZATION</Text>
+            <Text style={{ fontSize: 16, fontWeight: '900', color: '#B42318' }}>Critical master reset authorization</Text>
             <Text style={{ fontSize: 13, color: '#475569', lineHeight: 18 }}>
               This operations will permanently delete your entire data permanently.
             </Text>
@@ -689,47 +689,48 @@ export default function HRMonolithicControlHub() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8FAFC' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 24, paddingVertical: 14, backgroundColor: '#0F172A', borderBottomWidth: 1, borderColor: '#1E293B' },
+  container: { flex: 1, backgroundColor: '#F1F4F8' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 28, paddingVertical: 13, backgroundColor: '#102A43', borderBottomWidth: 1, borderColor: '#203E5C', shadowColor: '#102A43', shadowOpacity: 0.16, shadowRadius: 12, shadowOffset: { width: 0, height: 3 }, elevation: 3 },
   webBrandGroup: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  webLogoWrapper: { width: 22, height: 22, borderRadius: 6, backgroundColor: '#3B82F6', justifyContent: 'center', alignItems: 'center' },
-  webLogoInnerDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#FFFFFF' },
-  webBrandLogotype: { color: '#FFFFFF', fontSize: 16, fontWeight: '900', letterSpacing: 2 },
-  badgeHubStation: { backgroundColor: 'rgba(59, 130, 246, 0.15)', borderWidth: 1, borderColor: '#3B82F6', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
-  badgeHubText: { color: '#3B82F6', fontSize: 10, fontWeight: '800' },
-  toolbarCircleBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#1E293B', alignItems: 'center', justifyContent: 'center', position: 'relative', cursor: 'pointer' },
-  badgeCountOverlay: { position: 'absolute', top: -4, right: -4, backgroundColor: '#EF4444', minWidth: 16, height: 16, borderRadius: 8, paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center' },
-  badgeCountText: { color: '#FFFFFF', fontSize: 9, fontWeight: '900' },
-  bellAlertPulseActive: { borderColor: '#F59E0B', borderWidth: 1, backgroundColor: 'rgba(245, 158, 11, 0.1)' },
-  backBtn: { backgroundColor: '#334155', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 6 },
+  webLogoWrapper: { width: 25, height: 25, borderRadius: 7, backgroundColor: '#4C9AFF', justifyContent: 'center', alignItems: 'center' },
+  webLogoInnerDot: { width: 9, height: 9, borderRadius: 5, backgroundColor: '#EAF3FF' },
+  webBrandLogotype: { color: '#FFFFFF', fontSize: 16, fontWeight: '800', letterSpacing: 2.4 },
+  badgeHubStation: { backgroundColor: 'rgba(76, 154, 255, 0.14)', borderWidth: 1, borderColor: '#4C9AFF', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 5 },
+  badgeHubText: { color: '#BFD9F7', fontSize: 9, fontWeight: '800', letterSpacing: 0.6 },
+  toolbarCircleBtn: { minWidth: 78, height: 34, borderRadius: 7, backgroundColor: '#193B5A', alignItems: 'center', justifyContent: 'center', position: 'relative', cursor: 'pointer', paddingHorizontal: 11 },
+  toolbarIconText: { color: '#D9E7F5', fontSize: 11, fontWeight: '700' },
+  badgeCountOverlay: { position: 'absolute', top: -5, right: -5, backgroundColor: '#B42318', minWidth: 16, height: 16, borderRadius: 8, paddingHorizontal: 4, alignItems: 'center', justifyContent: 'center' },
+  badgeCountText: { color: '#FFFFFF', fontSize: 9, fontWeight: '800' },
+  bellAlertPulseActive: { borderColor: '#D69E2E', borderWidth: 1, backgroundColor: '#3A4660' },
+  backBtn: { backgroundColor: '#193B5A', paddingHorizontal: 13, paddingVertical: 8, borderRadius: 6 },
   textWhite: { color: '#FFFFFF', fontWeight: '700' },
   mainContent: { flex: 1, flexDirection: 'row' },
-  sidebar: { width: 240, backgroundColor: '#FFFFFF', borderRightWidth: 1, borderColor: '#E2E8F0', padding: 14 },
-  sidebarTitle: { fontSize: 11, fontWeight: '800', color: '#64748B', textTransform: 'uppercase', marginBottom: 10 },
-  searchBarContainer: { backgroundColor: '#F8FAFC', padding: 8, borderRadius: 6, borderWidth: 1, borderColor: '#E2E8F0', marginBottom: 12, fontSize: 13, color: '#1E293B' },
-  empCard: { flexDirection: 'row', alignItems: 'center', padding: 10, backgroundColor: '#F8FAFC', borderRadius: 6, marginBottom: 6 },
-  empCardActive: { backgroundColor: '#EFF6FF', borderWidth: 1, borderColor: '#3B82F6' },
-  empName: { fontSize: 13, flex: 1, color: '#334155' },
+  sidebar: { width: 248, backgroundColor: '#F8FAFC', borderRightWidth: 1, borderColor: '#DCE4EC', padding: 18 },
+  sidebarTitle: { fontSize: 10, fontWeight: '800', color: '#617386', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 12 },
+  searchBarContainer: { backgroundColor: '#FFFFFF', padding: 10, borderRadius: 7, borderWidth: 1, borderColor: '#D5DEE8', marginBottom: 14, fontSize: 13, color: '#223247', shadowColor: '#203B53', shadowOpacity: 0.04, shadowRadius: 4, shadowOffset: { width: 0, height: 1 } },
+  empCard: { flexDirection: 'row', alignItems: 'center', padding: 11, backgroundColor: 'transparent', borderRadius: 7, marginBottom: 3 },
+  empCardActive: { backgroundColor: '#E8F1FB', borderWidth: 1, borderColor: '#B9D2EC' },
+  empName: { fontSize: 13, flex: 1, color: '#26384D', fontWeight: '500' },
   statusDot: { width: 6, height: 6, borderRadius: 3, marginRight: 8 },
   statusDotLive: { backgroundColor: '#22C55E' },
   statusDotIdle: { backgroundColor: '#94A3B8' },
-  liveLabel: { fontSize: 9, fontWeight: '900', color: '#15803D', backgroundColor: '#DCFCE7', paddingHorizontal: 4, borderRadius: 3 },
-  workspace: { flex: 1, padding: 16, backgroundColor: '#FFFFFF' },
+  liveLabel: { fontSize: 9, fontWeight: '800', color: '#2F6B4F', backgroundColor: '#E4F0E9', paddingHorizontal: 5, borderRadius: 2 },
+  workspace: { flex: 1, padding: 22, backgroundColor: '#F1F4F8' },
   workspaceSplit: { flex: 1, flexDirection: 'row' },
-  controlBar: { flexDirection: 'row', gap: 10, marginBottom: 14 },
-  tableInputFilter: { flex: 1, backgroundColor: '#F8FAFC', padding: 8, borderRadius: 6, borderWidth: 1, borderColor: '#E2E8F0', fontSize: 13, color: '#1E293B' },
-  primaryBtn: { backgroundColor: '#3B82F6', paddingHorizontal: 14, borderRadius: 6, justifyContent: 'center' },
-  btnText: { color: '#FFFFFF', fontWeight: '800' },
-  tableScroll: { flex: 1, backgroundColor: '#FFFFFF', borderRadius: 8, borderWidth: 1, borderColor: '#E2E8F0' },
-  tableHeaderRow: { flexDirection: 'row', borderBottomWidth: 2, borderColor: '#CBD5E1', paddingBottom: 8, backgroundColor: '#F8FAFC', paddingHorizontal: 4 },
-  th: { fontSize: 11, fontWeight: '800', color: '#475569', textTransform: 'uppercase' },
-  tableRow: { flexDirection: 'row', paddingVertical: 10, borderBottomWidth: 1, borderColor: '#F1F5F9', alignItems: 'center', paddingHorizontal: 4 },
-  rowAlternate: { backgroundColor: '#F8FAFC' },
-  td: { fontSize: 13, color: '#334155' },
-  inlineInput: { borderWidth: 1, borderColor: '#3B82F6', borderRadius: 4, padding: 4, backgroundColor: '#FFF', fontSize: 13 },
-  badge: { paddingVertical: 2, paddingHorizontal: 6, borderRadius: 8, alignSelf: 'flex-start' },
-  badgeHome: { backgroundColor: '#DCFCE7' },
-  badgeTravel: { backgroundColor: '#E0F2FE' },
+  controlBar: { flexDirection: 'row', gap: 10, marginBottom: 16 },
+  tableInputFilter: { flex: 1, backgroundColor: '#FFFFFF', padding: 10, borderRadius: 7, borderWidth: 1, borderColor: '#D5DEE8', fontSize: 13, color: '#223247', shadowColor: '#203B53', shadowOpacity: 0.04, shadowRadius: 4, shadowOffset: { width: 0, height: 1 } },
+  primaryBtn: { backgroundColor: '#1769AA', paddingHorizontal: 16, borderRadius: 7, justifyContent: 'center', shadowColor: '#1769AA', shadowOpacity: 0.16, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
+  btnText: { color: '#FFFFFF', fontWeight: '800', fontSize: 12 },
+  tableScroll: { flex: 1, backgroundColor: '#FFFFFF', borderRadius: 9, borderWidth: 1, borderColor: '#DCE4EC', shadowColor: '#203B53', shadowOpacity: 0.06, shadowRadius: 12, shadowOffset: { width: 0, height: 3 } },
+  tableHeaderRow: { flexDirection: 'row', borderBottomWidth: 1, borderColor: '#D3DDE7', paddingBottom: 10, backgroundColor: '#F7F9FB', paddingHorizontal: 8, paddingTop: 2 },
+  th: { fontSize: 10, fontWeight: '800', color: '#617386', textTransform: 'uppercase', letterSpacing: 0.45 },
+  tableRow: { flexDirection: 'row', paddingVertical: 12, borderBottomWidth: 1, borderColor: '#EDF1F5', alignItems: 'center', paddingHorizontal: 8 },
+  rowAlternate: { backgroundColor: '#FCFDFE' },
+  td: { fontSize: 13, color: '#304258' },
+  inlineInput: { borderWidth: 1, borderColor: '#6E9BC5', borderRadius: 6, padding: 5, backgroundColor: '#FFF', fontSize: 13 },
+  badge: { paddingVertical: 4, paddingHorizontal: 8, borderRadius: 5, alignSelf: 'flex-start' },
+  badgeHome: { backgroundColor: '#E7F3EC' },
+  badgeTravel: { backgroundColor: '#E7F0F8' },
   viewBtn: { backgroundColor: '#EFF6FF', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 4 },
   editBtn: { backgroundColor: '#F1F5F9', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 4 },
   saveBtn: { backgroundColor: '#22C55E', paddingVertical: 6, paddingHorizontal: 10, borderRadius: 4 },
