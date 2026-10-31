@@ -11,21 +11,26 @@ import socketInstance from '../../src/services/socket';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 
-let MapView = null;
-let Polyline = null;
-let Marker = null;
-if (Platform.OS !== 'web') {
-  const Maps = require('react-native-maps');
-  MapView = Maps.default;
-  Polyline = Maps.Polyline;
-  Marker = Maps.Marker;
-}
-
 const OFFLINE_STORAGE_KEY = '@fieldo_offline_points';
 const OFFLINE_VISITS_KEY = '@fieldo_offline_visits';
 
 export default function TrackerScreen() {
   const router = useRouter();
+  const mapComponents = useMemo(() => {
+    if (Platform.OS === 'web') return null;
+
+    try {
+      const Maps = require('react-native-maps');
+      return {
+        MapView: Maps.default,
+        Polyline: Maps.Polyline,
+        Marker: Maps.Marker,
+      };
+    } catch (error) {
+      console.error('Unable to load native map components:', error);
+      return null;
+    }
+  }, []);
   const [user, setUser] = useState(null);
   const [isTracking, setIsTracking] = useState(false);
   const [locationSub, setLocationSub] = useState(null);
@@ -63,6 +68,10 @@ export default function TrackerScreen() {
 
   const [calendarMonth, setCalendarMonth] = useState(new Date().getMonth());
   const [calendarYear, setCalendarYear] = useState(new Date().getFullYear());
+
+  const MapView = mapComponents?.MapView;
+  const Polyline = mapComponents?.Polyline;
+  const Marker = mapComponents?.Marker;
 
   // Auth Listener & Profile Sync
   useEffect(() => {
