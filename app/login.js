@@ -1,9 +1,15 @@
 import { useRouter } from 'expo-router';
-import { signInWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
+import { signInWithEmailAndPassword, sendPasswordResetEmail, signOut } from 'firebase/auth';
 import { useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View, Modal, ActivityIndicator } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { auth } from '../src/services/firebaseConfig';
+
+const DEVICE_SESSION_KEY = '@fieldo_device_session_id';
+const ACTIVE_USER_KEY = '@fieldo_active_user';
+const OFFLINE_STORAGE_KEY = '@fieldo_offline_points';
+const OFFLINE_VISITS_KEY = '@fieldo_offline_visits';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
@@ -19,11 +25,35 @@ export default function LoginScreen() {
     }
     try {
       setLoading(true);
-      await signInWithEmailAndPassword(auth, email.trim(), password);
+      const { user } = await signInWithEmailAndPassword(auth, email.trim(), password);
+      const previousUserJson = await AsyncStorage.getItem(ACTIVE_USER_KEY);
+      const previousUser = previousUserJson ? JSON.parse(previousUserJson) : null;
+      if (previousUser?.userId && previousUser.userId !== user.uid) {
+        await AsyncStorage.multiRemove([OFFLINE_STORAGE_KEY, OFFLINE_VISITS_KEY]);
+      }
+      const uniqueSessionId = `SESSION_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const syncResponse = await fetch('https://fieldo.onrender.com/api/employees/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user.uid,
+          name: user.email.split('@')[0],
+          email: user.email,
+          deviceId: uniqueSessionId
+        })
+      });
+      if (!syncResponse.ok) {
+        const syncError = await syncResponse.json().catch(() => ({}));
+        throw new Error(syncError.error || 'This employee account is no longer active.');
+      }
+      await AsyncStorage.setItem(DEVICE_SESSION_KEY, uniqueSessionId);
+      await AsyncStorage.setItem(ACTIVE_USER_KEY, JSON.stringify({ userId: user.uid, email: user.email }));
       
       // Routes right into your single-page dashboard control hub
       router.replace('/(admin)/dashboard');
     } catch (error) {
+      await AsyncStorage.multiRemove([DEVICE_SESSION_KEY, ACTIVE_USER_KEY]);
+      await signOut(auth).catch(() => {});
       Alert.alert('Login Failed', error instanceof Error ? error.message : 'Unable to sign in.');
     } finally {
       setLoading(false);

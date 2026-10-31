@@ -6,6 +6,11 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { auth } from '../src/services/firebaseConfig';
 
+const DEVICE_SESSION_KEY = '@fieldo_device_session_id';
+const ACTIVE_USER_KEY = '@fieldo_active_user';
+const OFFLINE_STORAGE_KEY = '@fieldo_offline_points';
+const OFFLINE_VISITS_KEY = '@fieldo_offline_visits';
+
 export default function IndexScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -17,10 +22,35 @@ export default function IndexScreen() {
   const router = useRouter();
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user) {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (!user) {
+        setIsCheckingUser(false);
+        return;
+      }
+
+      try {
+        const deviceId = await AsyncStorage.getItem(DEVICE_SESSION_KEY);
+        if (!deviceId) throw new Error('No active device session');
+
+        const response = await fetch('https://fieldo.onrender.com/api/employees/verify-session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: user.uid, email: user.email, currentDeviceId: deviceId })
+        });
+        const session = response.ok ? await response.json() : { valid: false };
+
+        if (!session.valid) {
+          await AsyncStorage.multiRemove([DEVICE_SESSION_KEY, ACTIVE_USER_KEY, OFFLINE_STORAGE_KEY, OFFLINE_VISITS_KEY]);
+          await auth.signOut();
+          setIsCheckingUser(false);
+          return;
+        }
+
         router.replace('/(employee)/tracker');
-      } else {
+      } catch (error) {
+        console.error('Unable to validate saved login:', error);
+        await AsyncStorage.multiRemove([DEVICE_SESSION_KEY, ACTIVE_USER_KEY]);
+        await auth.signOut();
         setIsCheckingUser(false);
       }
     });
@@ -37,13 +67,18 @@ export default function IndexScreen() {
       setLoading(true);
       const userCredential = await signInWithEmailAndPassword(auth, email.trim(), password);
       const userInstance = userCredential.user;
+      const previousUserJson = await AsyncStorage.getItem(ACTIVE_USER_KEY);
+      const previousUser = previousUserJson ? JSON.parse(previousUserJson) : null;
+      if (previousUser?.userId && previousUser.userId !== userInstance.uid) {
+        await AsyncStorage.multiRemove([OFFLINE_STORAGE_KEY, OFFLINE_VISITS_KEY]);
+      }
 
       // 🟢 Generate a unique token identifier for this specific device session tracking lane
       const uniqueSessionId = `SESSION_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
       await AsyncStorage.setItem('@fieldo_device_session_id', uniqueSessionId);
 
       // Sync profile matrix to master cluster database roster
-      await fetch("https://fieldo.onrender.com/api/employees/sync", {
+      const syncResponse = await fetch("https://fieldo.onrender.com/api/employees/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -53,9 +88,19 @@ export default function IndexScreen() {
           deviceId: uniqueSessionId // 🟢 Overwrites backend table with active fingerprint
         })
       });
+      if (!syncResponse.ok) {
+        const syncError = await syncResponse.json().catch(() => ({}));
+        throw new Error(syncError.error || 'This employee account is no longer active.');
+      }
+      await AsyncStorage.setItem(ACTIVE_USER_KEY, JSON.stringify({
+        userId: userInstance.uid,
+        email: userInstance.email
+      }));
 
       router.replace('/(employee)/tracker');
     } catch (error) {
+      await AsyncStorage.multiRemove([DEVICE_SESSION_KEY, ACTIVE_USER_KEY]);
+      await auth.signOut().catch(() => {});
       Alert.alert('Login Failed', error instanceof Error ? error.message : 'Unable to sign in.');
     } finally {
       setLoading(false);

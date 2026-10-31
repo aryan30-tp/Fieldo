@@ -142,6 +142,17 @@ export default function HRMonolithicControlHub() {
       setSelectedUser({ id: null, name: '' });
     });
 
+    const handleLiveLocation = ({ userId, name, lat, lng, timestamp }) => {
+      const today = new Date().toISOString().split('T')[0];
+      const pointDate = new Date(timestamp).toISOString().split('T')[0];
+      if (!userId || pointDate !== today || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      setLiveEmployees((previous) => ({
+        ...previous,
+        [userId]: { name, lat, lng, lastPing: timestamp }
+      }));
+    };
+    socket.on('hr-location-stream', handleLiveLocation);
+
     const unsubscribe = onSnapshot(collection(db, 'daily_routes'), (snapshot) => {
       const liveMap = {};
       const today = new Date().toISOString().split('T')[0];
@@ -165,6 +176,7 @@ export default function HRMonolithicControlHub() {
       socket.off('ui-sync-notification-received');
       socket.off('ui-sync-notification-wiped');
       socket.off('ui-sync-system-nuked');
+      socket.off('hr-location-stream', handleLiveLocation);
     };
   }, [fetchMasterData, fetchNotifications]);
 

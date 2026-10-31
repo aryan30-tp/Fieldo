@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput, Platfo
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { db } from '../../src/services/firebaseConfig';
+import io from 'socket.io-client';
 
 let WebMap = null;
 if (Platform.OS === 'web' && typeof window !== 'undefined') {
@@ -79,6 +80,18 @@ export default function EmployeeTrackingWorkspace() {
       setActiveName(params.name || 'Employee');
     }
 
+    const handleLiveLocation = ({ userId, name, lat, lng, timestamp }) => {
+      const today = new Date().toISOString().split('T')[0];
+      const pointDate = new Date(timestamp).toISOString().split('T')[0];
+      if (!userId || pointDate !== today || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      setLiveEmployees((previous) => ({
+        ...previous,
+        [userId]: { name, lat, lng, lastPing: timestamp }
+      }));
+    };
+    const socket = io('https://fieldo.onrender.com');
+    socket.on('hr-location-stream', handleLiveLocation);
+
     const unsubscribe = onSnapshot(collection(db, 'daily_routes'), (snapshot) => {
       const liveMap = {};
       const today = new Date().toISOString().split('T')[0];
@@ -101,7 +114,11 @@ export default function EmployeeTrackingWorkspace() {
       setLiveEmployees(liveMap);
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      socket.off('hr-location-stream', handleLiveLocation);
+      socket.disconnect();
+    };
   }, [fetchSidebarRoster, params.userId, params.name]);
 
   useEffect(() => {

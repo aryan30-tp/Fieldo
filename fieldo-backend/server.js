@@ -43,6 +43,13 @@ const EmployeeSchema = new mongoose.Schema({
 });
 const Employee = mongoose.model('Employee', EmployeeSchema);
 
+const RevokedIdentitySchema = new mongoose.Schema({
+  userId: { type: String, unique: true },
+  email: String,
+  revokedAt: { type: Number, default: Date.now }
+});
+const RevokedIdentity = mongoose.model('RevokedIdentity', RevokedIdentitySchema);
+
 const NotificationSchema = new mongoose.Schema({
   userId: String,
   employeeName: String,
@@ -83,19 +90,34 @@ function calculateDistanceKM(lat1, lon1, lat2, lon2) {
 // --- 1. EMPLOYEE PROFILE & AUTH PRIVILEGES ---
 
 app.post('/api/employees/sync', async (req, res) => {
-  const { userId, name, email, deviceId } = req.body;
+  const { userId, email, deviceId } = req.body;
+  if (!userId || !email) return res.status(400).json({ error: "Identity parameters missing" });
   try {
+    const revokedIdentity = await RevokedIdentity.findOne({ userId }).lean();
+    if (revokedIdentity) return res.status(403).json({ error: "Account access has been revoked" });
+
     const updatePayload = { email };
     if (deviceId) updatePayload.currentDeviceId = deviceId;
 
-    const employee = await Employee.findOneAndUpdate(
-      { userId },
-      { 
-        $set: updatePayload,
-        $setOnInsert: { firstName: name, empId: String(Date.now()).slice(-4) } 
-      },
-      { upsert: true, new: true }
-    );
+    let employee = await Employee.findOne({ userId });
+    if (!employee) {
+      employee = await Employee.findOne({ email });
+      if (!employee || !String(employee.userId).startsWith('PROVISIONED_')) {
+        return res.status(403).json({ error: "Employee account is not provisioned for this identity" });
+      }
+
+      employee = await Employee.findOneAndUpdate(
+        { _id: employee._id },
+        { $set: { ...updatePayload, userId } },
+        { returnDocument: 'after' }
+      );
+    } else {
+      employee = await Employee.findOneAndUpdate(
+        { userId },
+        { $set: updatePayload },
+        { returnDocument: 'after' }
+      );
+    }
     res.status(200).json(employee);
   } catch (err) {
     res.status(500).json({ error: "Failed to sync profile" });
@@ -103,11 +125,15 @@ app.post('/api/employees/sync', async (req, res) => {
 });
 
 app.post('/api/employees/verify-session', async (req, res) => {
-  const { userId, currentDeviceId } = req.body;
+  const { userId, currentDeviceId, email } = req.body;
   if (!userId || !currentDeviceId) return res.status(400).json({ error: "Parameters missing" });
   try {
+    const revokedIdentity = await RevokedIdentity.findOne({ userId }).lean();
+    if (revokedIdentity) return res.status(200).json({ valid: false, reason: "revoked" });
+
     const employee = await Employee.findOne({ userId }).lean();
-    if (!employee) return res.status(404).json({ error: "Profile not found" });
+    if (!employee) return res.status(200).json({ valid: false, reason: "profile_not_found" });
+    if (email && employee.email !== email) return res.status(200).json({ valid: false, reason: "identity_mismatch" });
     res.status(200).json({ valid: employee.currentDeviceId === currentDeviceId });
   } catch (err) {
     res.status(500).json({ error: "Verification server loop error" });
@@ -215,7 +241,7 @@ app.post('/api/hr/employees/add', async (req, res) => {
 
 app.put('/api/hr/employees/:id', async (req, res) => {
   try {
-    const updatedEmployee = await Employee.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true });
+    const updatedEmployee = await Employee.findByIdAndUpdate(req.params.id, { $set: req.body }, { returnDocument: 'after' });
     res.status(200).json({ success: true, employee: updatedEmployee });
   } catch (err) {
     res.status(500).json({ error: "Profile modification save error." });
@@ -224,6 +250,14 @@ app.put('/api/hr/employees/:id', async (req, res) => {
 
 app.delete('/api/hr/employees/:id', async (req, res) => {
   try {
+    const employee = await Employee.findById(req.params.id).lean();
+    if (employee?.userId && !String(employee.userId).startsWith('PROVISIONED_')) {
+      await RevokedIdentity.updateOne(
+        { userId: employee.userId },
+        { $set: { email: employee.email, revokedAt: Date.now() } },
+        { upsert: true }
+      );
+    }
     await Employee.findByIdAndDelete(req.params.id);
     res.status(200).json({ success: true });
   } catch (err) {
@@ -350,6 +384,7 @@ app.post('/api/system/nuke-reset', async (req, res) => {
       Route.deleteMany({}),
       Visit.deleteMany({}),
       Employee.deleteMany({}),
+      RevokedIdentity.deleteMany({}),
       Notification.deleteMany({})
     ]);
     io.emit('ui-sync-system-nuked');

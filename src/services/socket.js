@@ -5,19 +5,27 @@ const RENDER_BACKEND_URL = "https://fieldo.onrender.com";
 
 class SocketService {
   socket = null;
+  pendingLocation = null;
 
   connect(userId) {
-    if (this.socket) return;
+    if (this.socket) {
+      if (this.socket.userId === userId) return;
+      this.disconnect();
+    }
 
     this.socket = io(RENDER_BACKEND_URL, {
       transports: ['websocket'],
       autoConnect: true,
     });
+    this.socket.userId = userId;
 
     this.socket.on('connect', () => {
       console.log('📡 Connected to Render WebSocket Server!');
-      // Register our profile identity immediately upon handshake
       this.socket.emit('register', { userId });
+      if (this.pendingLocation) {
+        this.socket.emit('location-update', this.pendingLocation);
+        this.pendingLocation = null;
+      }
     });
 
     this.socket.on('disconnect', () => {
@@ -28,6 +36,8 @@ class SocketService {
   emitLocation(data) {
     if (this.socket && this.socket.connected) {
       this.socket.emit('location-update', data);
+    } else {
+      this.pendingLocation = data;
     }
   }
 
@@ -36,6 +46,7 @@ class SocketService {
       this.socket.disconnect();
       this.socket = null;
     }
+    this.pendingLocation = null;
   }
 }
 

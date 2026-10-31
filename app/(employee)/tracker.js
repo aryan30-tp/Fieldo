@@ -75,6 +75,7 @@ function OSMMap({ style, center, routePoints = [] }) {
 export default function TrackerScreen() {
   const router = useRouter();
   const [user, setUser] = useState(null);
+  const [sessionValid, setSessionValid] = useState(false);
   const [isTracking, setIsTracking] = useState(false);
   const [locationSub, setLocationSub] = useState(null);
   const [status, setStatus] = useState('Idle');
@@ -116,25 +117,11 @@ export default function TrackerScreen() {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       if (!currentUser) {
+        setSessionValid(false);
         router.replace('/');
         return;
       }
       setUser(currentUser);
-      socketInstance.connect(currentUser.uid);
-
-      try {
-        await fetch("https://fieldo.onrender.com/api/employees/sync", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            userId: currentUser.uid,
-            name: currentUser.email.split('@')[0],
-            email: currentUser.email
-          })
-        });
-      } catch (err) {
-        console.log("Failed to sync profile:", err);
-      }
     });
     return () => unsubscribe();
   }, [router]);
@@ -146,37 +133,56 @@ export default function TrackerScreen() {
     const checkDeviceSessionValidity = async () => {
       try {
         const localSessionId = await AsyncStorage.getItem('@fieldo_device_session_id');
-        if (!localSessionId) return;
+        if (!localSessionId) {
+          setSessionValid(false);
+          await auth.signOut();
+          return;
+        }
 
         const response = await fetch("https://fieldo.onrender.com/api/employees/verify-session", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             userId: user.uid,
+            email: user.email,
             currentDeviceId: localSessionId
           })
         });
 
-        if (response.ok) {
-          const data = await response.json();
-          if (data.valid === false) {
+        const data = response.ok ? await response.json() : { valid: false };
+        if (!data.valid) {
+          setSessionValid(false);
             if (isTracking) {
               if (locationSub) locationSub.remove();
               if (await TaskManager.isTaskRegisteredAsync(BACKGROUND_LOCATION_TASK)) {
                 await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
               }
             }
-            await AsyncStorage.removeItem('@fieldo_device_session_id');
+            await AsyncStorage.multiRemove([
+              '@fieldo_device_session_id',
+              '@fieldo_active_user',
+              OFFLINE_STORAGE_KEY,
+              OFFLINE_VISITS_KEY
+            ]);
+            socketInstance.disconnect();
             await auth.signOut();
             Alert.alert(
               "Session Terminated", 
-              "This account has been activated on another mobile device. Recording has been stopped.",
+              data.reason === 'revoked'
+                ? "This employee account has been revoked. Recording and local pending data were cleared."
+                : "This account is no longer active on this device. Recording and local pending data were cleared.",
               [{ text: "OK", onPress: () => router.replace('/') }]
             );
-          }
+            return;
         }
+        setSessionValid(true);
+        await AsyncStorage.setItem('@fieldo_active_user', JSON.stringify({
+          userId: user.uid,
+          email: user.email
+        }));
+        socketInstance.connect(user.uid);
       } catch (err) {
-        console.log("Session checker offline bypass.");
+        console.error("Session validation failed:", err);
       }
     };
 
@@ -186,7 +192,7 @@ export default function TrackerScreen() {
   }, [user, isTracking, locationSub, router]);
 
   const loadMyHistoryData = useCallback(async () => {
-    if (!user) return;
+    if (!user || !sessionValid) return;
     try {
       const [attRes, visitRes] = await Promise.all([
         fetch(`https://fieldo.onrender.com/api/attendance/${user.uid}`),
@@ -197,7 +203,7 @@ export default function TrackerScreen() {
     } catch (err) {
       console.error("Failed to load history logs:", err);
     }
-  }, [user]);
+  }, [user, sessionValid]);
 
   useEffect(() => {
     if (activeTab === 'history') {
@@ -250,6 +256,9 @@ export default function TrackerScreen() {
 
       try {
         await setDoc(routeRef, {
+          userId: user.uid,
+          name: user.email.split('@')[0],
+          date: today,
           points: arrayUnion({ lat: latitude, lng: longitude, timestamp: Date.now() }),
           lastPing: Date.now(),
           isActive: true
@@ -313,7 +322,7 @@ export default function TrackerScreen() {
 
   useEffect(() => {
     const syncTrackingState = async () => {
-      if (!user) return;
+      if (!user || !sessionValid) return;
       const today = new Date().toISOString().split('T')[0];
       const routeRef = doc(db, 'daily_routes', `${user.uid}_${today}`);
       const hasTask = await TaskManager.isTaskRegisteredAsync(BACKGROUND_LOCATION_TASK);
@@ -336,7 +345,7 @@ export default function TrackerScreen() {
       }
     };
     syncTrackingState();
-  }, [user]);
+  }, [user, sessionValid]);
 
   useEffect(() => {
     (async () => {
@@ -494,6 +503,13 @@ export default function TrackerScreen() {
   const handleGlobalLogoutAction = async () => {
     setIsSettingsOpen(false);
     if (isTracking) await toggleTracking();
+    socketInstance.disconnect();
+    await AsyncStorage.multiRemove([
+      '@fieldo_device_session_id',
+      '@fieldo_active_user',
+      OFFLINE_STORAGE_KEY,
+      OFFLINE_VISITS_KEY
+    ]);
     await auth.signOut();
     router.replace('/');
   };
