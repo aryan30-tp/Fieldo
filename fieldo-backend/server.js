@@ -3,6 +3,26 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const mongoose = require('mongoose');
+const admin = require('firebase-admin');
+
+const firebasePrivateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n');
+const firebaseAdminConfigured = Boolean(
+  process.env.FIREBASE_PROJECT_ID &&
+  process.env.FIREBASE_CLIENT_EMAIL &&
+  firebasePrivateKey
+);
+
+if (firebaseAdminConfigured && !admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert({
+      projectId: process.env.FIREBASE_PROJECT_ID,
+      clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
+      privateKey: firebasePrivateKey
+    })
+  });
+}
+
+const firebaseAuth = firebaseAdminConfigured ? admin.auth() : null;
 
 // --- DATABASE SCHEMAS & MODELS ---
 const RouteSchema = new mongoose.Schema({
@@ -223,18 +243,47 @@ app.get('/api/hr/employees', async (req, res) => {
 });
 
 app.post('/api/hr/employees/add', async (req, res) => {
-  const { empId, firstName, lastName, area, email, mobile } = req.body;
+  const { empId, firstName, lastName, area, email, mobile, password = 'employee' } = req.body;
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (!empId || !firstName || !normalizedEmail || !mobile || String(password).length < 6) {
+    return res.status(400).json({ error: "Employee fields and a valid password are required." });
+  }
+  if (!firebaseAuth) {
+    return res.status(503).json({ error: "Firebase account provisioning is not configured on the backend." });
+  }
+
+  let firebaseUser = null;
   try {
-    const existing = await Employee.findOne({ $or: [{ email }, { empId }] });
+    const existing = await Employee.findOne({ $or: [{ email: normalizedEmail }, { empId }] });
     if (existing) return res.status(400).json({ error: "Parameter collision." });
 
-    const newEmp = new Employee({
-      userId: "PROVISIONED_" + Math.random().toString(36).substring(2, 11),
-      empId, firstName, lastName, area: area || '-', email, mobile, name: firstName
+    firebaseUser = await firebaseAuth.createUser({
+      email: normalizedEmail,
+      password: String(password),
+      displayName: `${firstName} ${lastName || ''}`.trim()
     });
-    await newEmp.save();
-    res.status(201).json({ success: true, employee: newEmp });
+
+    try {
+      const newEmp = new Employee({
+        userId: firebaseUser.uid,
+        empId,
+        firstName,
+        lastName,
+        area: area || '-',
+        email: normalizedEmail,
+        mobile,
+        name: firstName
+      });
+      await newEmp.save();
+      res.status(201).json({ success: true, employee: newEmp });
+    } catch (databaseError) {
+      await firebaseAuth.deleteUser(firebaseUser.uid);
+      throw databaseError;
+    }
   } catch (err) {
+    if (err?.code === 'auth/email-already-exists') {
+      return res.status(409).json({ error: "A Firebase account already exists for this email." });
+    }
     res.status(500).json({ error: "Provisioning failure" });
   }
 });

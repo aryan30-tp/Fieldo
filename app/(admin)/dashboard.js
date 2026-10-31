@@ -225,7 +225,8 @@ export default function HRMonolithicControlHub() {
         fetchMasterData();
         if (data.employee) socket.emit('hr-employee-updated', data.employee);
       } else {
-        alert("Provisioning failed. Check for duplicate IDs or emails.");
+        const errorData = await response.json().catch(() => ({}));
+        alert(errorData.error || "Provisioning failed. Check for duplicate IDs or emails.");
       }
     } catch (err) {
       console.error(err);
