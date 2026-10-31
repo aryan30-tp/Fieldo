@@ -6,6 +6,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export const BACKGROUND_LOCATION_TASK = 'background-location-tracking';
 const ACTIVE_USER_KEY = '@fieldo_active_user';
+const TRACKING_STATE_KEY = '@fieldo_tracking_state';
 
 TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
   if (error) {
@@ -23,6 +24,9 @@ TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
 
       const timestamp = Date.now();
       const today = new Date().toISOString().split('T')[0];
+      const trackingStateJson = await AsyncStorage.getItem(TRACKING_STATE_KEY);
+      const trackingState = trackingStateJson ? JSON.parse(trackingStateJson) : null;
+      if (trackingState?.userId !== activeUser.userId || trackingState?.date !== today || trackingState?.isTracking !== true) return;
       const routeRef = doc(db, 'daily_routes', `${activeUser.userId}_${today}`);
       await setDoc(routeRef, {
         userId: activeUser.userId,

@@ -3,13 +3,18 @@ import { signInWithEmailAndPassword, sendPasswordResetEmail, signOut } from 'fir
 import { useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View, Modal, ActivityIndicator } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Location from 'expo-location';
+import * as TaskManager from 'expo-task-manager';
+import { BACKGROUND_LOCATION_TASK } from '../src/services/locationTask';
 
 import { auth } from '../src/services/firebaseConfig';
 
 const DEVICE_SESSION_KEY = '@fieldo_device_session_id';
 const ACTIVE_USER_KEY = '@fieldo_active_user';
+const INSTALLATION_ID_KEY = '@fieldo_installation_id';
 const OFFLINE_STORAGE_KEY = '@fieldo_offline_points';
 const OFFLINE_VISITS_KEY = '@fieldo_offline_visits';
+const TRACKING_STATE_KEY = '@fieldo_tracking_state';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
@@ -30,8 +35,16 @@ export default function LoginScreen() {
       const previousUser = previousUserJson ? JSON.parse(previousUserJson) : null;
       if (previousUser?.userId && previousUser.userId !== user.uid) {
         await AsyncStorage.multiRemove([OFFLINE_STORAGE_KEY, OFFLINE_VISITS_KEY]);
+        if (await TaskManager.isTaskRegisteredAsync(BACKGROUND_LOCATION_TASK)) {
+          await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
+        }
+        await AsyncStorage.removeItem(TRACKING_STATE_KEY);
       }
-      const uniqueSessionId = `SESSION_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      let installationId = await AsyncStorage.getItem(INSTALLATION_ID_KEY);
+      if (!installationId) {
+        installationId = `INSTALLATION_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+        await AsyncStorage.setItem(INSTALLATION_ID_KEY, installationId);
+      }
       const syncResponse = await fetch('https://fieldo.onrender.com/api/employees/sync', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -39,14 +52,14 @@ export default function LoginScreen() {
           userId: user.uid,
           name: user.email.split('@')[0],
           email: user.email,
-          deviceId: uniqueSessionId
+          deviceId: installationId
         })
       });
       if (!syncResponse.ok) {
         const syncError = await syncResponse.json().catch(() => ({}));
         throw new Error(syncError.error || 'This employee account is no longer active.');
       }
-      await AsyncStorage.setItem(DEVICE_SESSION_KEY, uniqueSessionId);
+      await AsyncStorage.setItem(DEVICE_SESSION_KEY, installationId);
       await AsyncStorage.setItem(ACTIVE_USER_KEY, JSON.stringify({ userId: user.uid, email: user.email }));
       
       // Routes right into your single-page dashboard control hub

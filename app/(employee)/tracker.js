@@ -14,6 +14,7 @@ import { WebView } from 'react-native-webview';
 
 const OFFLINE_STORAGE_KEY = '@fieldo_offline_points';
 const OFFLINE_VISITS_KEY = '@fieldo_offline_visits';
+const TRACKING_STATE_KEY = '@fieldo_tracking_state';
 
 function OSMMap({ style, center, routePoints = [] }) {
   const mapHtml = useMemo(() => {
@@ -135,6 +136,7 @@ export default function TrackerScreen() {
         const localSessionId = await AsyncStorage.getItem('@fieldo_device_session_id');
         if (!localSessionId) {
           setSessionValid(false);
+          await AsyncStorage.removeItem(TRACKING_STATE_KEY);
           await auth.signOut();
           return;
         }
@@ -162,7 +164,8 @@ export default function TrackerScreen() {
               '@fieldo_device_session_id',
               '@fieldo_active_user',
               OFFLINE_STORAGE_KEY,
-              OFFLINE_VISITS_KEY
+              OFFLINE_VISITS_KEY,
+              TRACKING_STATE_KEY
             ]);
             socketInstance.disconnect();
             await auth.signOut();
@@ -330,6 +333,11 @@ export default function TrackerScreen() {
       if (hasTask) {
         setIsTracking(true);
         setStatus('Recording live & in background...');
+        await AsyncStorage.setItem(TRACKING_STATE_KEY, JSON.stringify({
+          userId: user.uid,
+          date: today,
+          isTracking: true
+        }));
         setDoc(routeRef, { isActive: true }, { merge: true });
 
         const sub = await Location.watchPositionAsync(
@@ -367,6 +375,7 @@ export default function TrackerScreen() {
       if (await TaskManager.isTaskRegisteredAsync(BACKGROUND_LOCATION_TASK)) await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
       setIsTracking(false);
       setStatus('Recording stopped');
+      await AsyncStorage.removeItem(TRACKING_STATE_KEY);
       await setDoc(routeRef, { isActive: false }, { merge: true });
       return;
     }
@@ -377,12 +386,21 @@ export default function TrackerScreen() {
 
     setIsTracking(true);
     setStatus('Recording live & in background...');
+    await AsyncStorage.setItem(TRACKING_STATE_KEY, JSON.stringify({
+      userId: user.uid,
+      date: today,
+      isTracking: true
+    }));
     setDoc(routeRef, { userId: user.uid, name: user.email.split('@')[0], date: today, isActive: true }, { merge: true });
 
     if (bgPerm.status === 'granted') {
       await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, {
         accuracy: Location.Accuracy.Highest, timeInterval: 10000, distanceInterval: 5, showsBackgroundLocationIndicator: true,
-        foregroundService: { notificationTitle: "Fieldo is active", notificationBody: "Recording your shift route.", notificationColor: "#22C55E" }
+        foregroundService: {
+          notificationTitle: "Fieldo is active",
+          notificationBody: "Fieldo is actively recording your work location.",
+          notificationColor: "#22C55E"
+        }
       });
     }
 
@@ -508,7 +526,8 @@ export default function TrackerScreen() {
       '@fieldo_device_session_id',
       '@fieldo_active_user',
       OFFLINE_STORAGE_KEY,
-      OFFLINE_VISITS_KEY
+      OFFLINE_VISITS_KEY,
+      TRACKING_STATE_KEY
     ]);
     await auth.signOut();
     router.replace('/');

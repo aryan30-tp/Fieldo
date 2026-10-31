@@ -3,13 +3,18 @@ import { onAuthStateChanged, signInWithEmailAndPassword, sendPasswordResetEmail 
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View, Modal } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Location from 'expo-location';
+import * as TaskManager from 'expo-task-manager';
+import { BACKGROUND_LOCATION_TASK } from '../src/services/locationTask';
 
 import { auth } from '../src/services/firebaseConfig';
 
 const DEVICE_SESSION_KEY = '@fieldo_device_session_id';
 const ACTIVE_USER_KEY = '@fieldo_active_user';
+const INSTALLATION_ID_KEY = '@fieldo_installation_id';
 const OFFLINE_STORAGE_KEY = '@fieldo_offline_points';
 const OFFLINE_VISITS_KEY = '@fieldo_offline_visits';
+const TRACKING_STATE_KEY = '@fieldo_tracking_state';
 
 export default function IndexScreen() {
   const [email, setEmail] = useState('');
@@ -71,11 +76,19 @@ export default function IndexScreen() {
       const previousUser = previousUserJson ? JSON.parse(previousUserJson) : null;
       if (previousUser?.userId && previousUser.userId !== userInstance.uid) {
         await AsyncStorage.multiRemove([OFFLINE_STORAGE_KEY, OFFLINE_VISITS_KEY]);
+        if (await TaskManager.isTaskRegisteredAsync(BACKGROUND_LOCATION_TASK)) {
+          await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
+        }
+        await AsyncStorage.removeItem(TRACKING_STATE_KEY);
       }
 
       // 🟢 Generate a unique token identifier for this specific device session tracking lane
-      const uniqueSessionId = `SESSION_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      await AsyncStorage.setItem('@fieldo_device_session_id', uniqueSessionId);
+      let installationId = await AsyncStorage.getItem(INSTALLATION_ID_KEY);
+      if (!installationId) {
+        installationId = `INSTALLATION_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+        await AsyncStorage.setItem(INSTALLATION_ID_KEY, installationId);
+      }
+      await AsyncStorage.setItem('@fieldo_device_session_id', installationId);
 
       // Sync profile matrix to master cluster database roster
       const syncResponse = await fetch("https://fieldo.onrender.com/api/employees/sync", {
@@ -85,7 +98,7 @@ export default function IndexScreen() {
           userId: userInstance.uid,
           name: userInstance.email.split('@')[0],
           email: userInstance.email,
-          deviceId: uniqueSessionId // 🟢 Overwrites backend table with active fingerprint
+          deviceId: installationId
         })
       });
       if (!syncResponse.ok) {
