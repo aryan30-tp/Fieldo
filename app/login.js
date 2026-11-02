@@ -2,19 +2,8 @@ import { useRouter } from 'expo-router';
 import { signInWithEmailAndPassword, sendPasswordResetEmail, signOut } from 'firebase/auth';
 import { useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View, Modal, ActivityIndicator } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Location from 'expo-location';
-import * as TaskManager from 'expo-task-manager';
-import { BACKGROUND_LOCATION_TASK } from '../src/services/locationTask';
 
 import { auth } from '../src/services/firebaseConfig';
-
-const DEVICE_SESSION_KEY = '@fieldo_device_session_id';
-const ACTIVE_USER_KEY = '@fieldo_active_user';
-const INSTALLATION_ID_KEY = '@fieldo_installation_id';
-const OFFLINE_STORAGE_KEY = '@fieldo_offline_points';
-const OFFLINE_VISITS_KEY = '@fieldo_offline_visits';
-const TRACKING_STATE_KEY = '@fieldo_tracking_state';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
@@ -30,42 +19,9 @@ export default function LoginScreen() {
     }
     try {
       setLoading(true);
-      const { user } = await signInWithEmailAndPassword(auth, email.trim(), password);
-      const previousUserJson = await AsyncStorage.getItem(ACTIVE_USER_KEY);
-      const previousUser = previousUserJson ? JSON.parse(previousUserJson) : null;
-      if (previousUser?.userId && previousUser.userId !== user.uid) {
-        await AsyncStorage.multiRemove([OFFLINE_STORAGE_KEY, OFFLINE_VISITS_KEY]);
-        if (await TaskManager.isTaskRegisteredAsync(BACKGROUND_LOCATION_TASK)) {
-          await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
-        }
-        await AsyncStorage.removeItem(TRACKING_STATE_KEY);
-      }
-      let installationId = await AsyncStorage.getItem(INSTALLATION_ID_KEY);
-      if (!installationId) {
-        installationId = `INSTALLATION_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
-        await AsyncStorage.setItem(INSTALLATION_ID_KEY, installationId);
-      }
-      const syncResponse = await fetch('https://fieldo.onrender.com/api/employees/sync', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: user.uid,
-          name: user.email.split('@')[0],
-          email: user.email,
-          deviceId: installationId
-        })
-      });
-      if (!syncResponse.ok) {
-        const syncError = await syncResponse.json().catch(() => ({}));
-        throw new Error(syncError.error || 'This employee account is no longer active.');
-      }
-      await AsyncStorage.setItem(DEVICE_SESSION_KEY, installationId);
-      await AsyncStorage.setItem(ACTIVE_USER_KEY, JSON.stringify({ userId: user.uid, email: user.email }));
-      
-      // Routes right into your single-page dashboard control hub
+      await signInWithEmailAndPassword(auth, email.trim(), password);
       router.replace('/(admin)/dashboard');
     } catch (error) {
-      await AsyncStorage.multiRemove([DEVICE_SESSION_KEY, ACTIVE_USER_KEY]);
       await signOut(auth).catch(() => {});
       Alert.alert('Login Failed', error instanceof Error ? error.message : 'Unable to sign in.');
     } finally {
@@ -159,7 +115,7 @@ function ForgotPasswordModal({ visible, onClose }) {
         <View style={styles.modalContent}>
           <Text style={styles.modalTitle}>🔒 Reset Password</Text>
           <Text style={styles.modalSubtitle}>
-            Enter your email below, and we'll send you a secure link to choose a new password.
+            Enter your email below, and we&apos;ll send you a secure link to choose a new password.
           </Text>
 
           <TextInput
